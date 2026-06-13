@@ -131,7 +131,48 @@ All tests pass in XSim: write/read-back, x0-stays-zero, write-enable gating, and
 independent dual-port reads. Read-async / write-sync behavior confirmed in the
 waveform.
 
-### Next
+---
 
-Build the ALU (combinational: two 32-bit operands + an op-select -> 32-bit result).
-Writing the RTL myself from spec this time.
+## Day 3 — ALU
+
+**Goal:** build the RV32I arithmetic/logic unit — the compute engine the register
+file feeds into — and verify all ten operations in simulation.
+
+### What I learned
+
+- The ALU is **purely combinational**: two operands and a control code in, a result
+  out, no clock and no state. Built with a single `always_comb` + `case` block,
+  which acts as a big multiplexer selecting which computed result reaches the output.
+- **The 10 operations are not arbitrary** — they are the minimal set the RV32I base
+  integer instructions need: ADD (also used for memory-address and branch-target
+  calculation), SUB, AND, OR, XOR, SLL, SRL, SRA, SLT, SLTU. Loads, stores, branches,
+  and jumps reuse these (a branch compares with SUB/SLT, a load computes its address
+  with ADD). Multiply/divide are absent because they belong to the optional M
+  extension.
+- **Op encoding:** 10 operations need 4 control bits (2^4 = 16 ≥ 10). Encoded as
+  named `localparam`s (`ALU_ADD` etc.) instead of magic numbers — readable and
+  decouples the names from the chosen values.
+- **Signed vs unsigned shows up twice, and it matters:**
+  - SRL (logical right shift) fills vacated bits with 0; SRA (arithmetic) preserves
+    the sign by filling with the sign bit. SRA requires both `$signed(a)` and the
+    `>>>` operator — `>>>` alone on an unsigned operand does not sign-extend.
+  - SLT (signed) and SLTU (unsigned) compare the same bits differently: `0xFFFFFFFF`
+    is −1 signed but ~4.29e9 unsigned, so SLT vs SLTU give opposite answers. Default
+    `logic` comparison is unsigned, so SLT needs `$signed()` on both operands.
+- **Shift amount is `b[4:0]`** (low 5 bits) for all three shifts, because a 32-bit
+  value can only meaningfully shift by 0–31.
+- Instruction sets are extensible: new ops can be added as ALU case arms, full custom
+  instructions via the decoder, or whole standard extensions (M, F). ML acceleration
+  is more likely a **separate parallel accelerator** (systolic array of MAC units)
+  attached as a coprocessor than just extra ALU ops — same SystemVerilog/verification
+  skills, bigger structure.
+
+### Verification
+
+Self-checking testbench (combinational, so no clock/edge discipline — just drive
+inputs, `#1` to settle, compare). All ten operations pass, including the two edge-case
+pairs that actually prove correctness:
+- SRA vs SRL on `0xFFFFFFF0`: `0xFFFFFFFF` (sign-filled) vs `0x0FFFFFFF` (zero-filled).
+- SLT vs SLTU on `0xFFFFFFFF` < `1`: `1` (signed, −1<1) vs `0` (unsigned, huge≥1).
+
+
