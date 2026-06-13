@@ -11,14 +11,14 @@ along the way are recorded in the [build log](docs/devlog.md).
 
 ## Status
 
-| Milestone | State |
-|---|---|
-| Board bring-up (blink) | ✅ Done |
-| Single-cycle RV32I datapath | ⬜ Planned |
-| 5-stage pipeline + hazard/forwarding | ⬜ Planned |
-| Memory + UART + CSRs | ⬜ Planned |
-| Branch prediction + benchmarks (Dhrystone/CoreMark) | ⬜ Planned |
-| Verification: riscv-tests, CocoTB, Spike co-sim | ⬜ Planned |
+|Milestone|State|
+|-|-|
+|Board bring-up (blink)|✅ Done|
+|Single-cycle RV32I datapath|⬜ Planned|
+|5-stage pipeline + hazard/forwarding|⬜ Planned|
+|Memory + UART + CSRs|⬜ Planned|
+|Branch prediction + benchmarks (Dhrystone/CoreMark)|⬜ Planned|
+|Verification: riscv-tests, CocoTB, Spike co-sim|⬜ Planned|
 
 ## Repository layout
 
@@ -38,21 +38,19 @@ This repo is **source-only** — Vivado's generated files are intentionally not
 committed. To build, regenerate the project from source:
 
 1. Open Vivado, then in the Tcl console run:
-   ```
+
+```
    cd <path-to-repo>
    source scripts/build.tcl
    ```
+
    This creates the project, adds the RTL and constraints, and targets the
-   correct part (`xc7s50csga324-1`).
+correct part (`xc7s50csga324-1`).
+
 2. Run synthesis → implementation → generate bitstream.
 3. Open Hardware Manager, connect the board, and program the device.
 
-## Why source-only?
+   ## License
 
-Everything Vivado generates (`.runs/`, `.cache/`, checkpoints, logs) is
-regenerable from the RTL, constraints, and `build.tcl`. Committing only
-human-written source keeps the history clean and the repo small.
+   MIT — see [LICENSE](LICENSE).
 
-## License
-
-MIT — see [LICENSE](LICENSE).
