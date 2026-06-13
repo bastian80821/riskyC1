@@ -1,0 +1,32 @@
+# ---- Vivado generated files (all regenerable from source + build.tcl) ----
+*.jou
+*.log
+*.str
+*.dcp
+*.bit
+*.ltx
+*.rpt
+*.pb
+
+# Vivado project/run directories
+*.cache/
+*.hw/
+*.ip_user_files/
+*.runs/
+*.sim/
+*.gen/
+.Xil/
+
+# Vivado project file (regenerate with scripts/build.tcl)
+*.xpr
+
+# ---- Simulation output ----
+sim/work/
+sim/*.vcd
+sim/*.wdb
+
+# ---- OS / editor cruft ----
+.DS_Store
+Thumbs.db
+*.swp
+*~
