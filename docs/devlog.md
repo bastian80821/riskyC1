@@ -74,6 +74,64 @@ Clean bitstream, programmed over JTAG, LD2 blinks at ~1 Hz. Toolchain path
 confirmed end to end. Bus output (`led[3:0]`) wired so any of the four LEDs can
 be driven, and multiple LEDs can be driven independently.
 
+---
+
+## Day 2 — Register File
+
+**Goal:** build the RV32I register file, the CPU's fast 32-register scratchpad,
+and verify it with a self-checking testbench in simulation.
+
+### What I learned
+
+- RV32I has **32 registers, each 32 bits**. Most logical to build this component
+  first — nearly every instruction reads and/or writes it, so the ALU, decoder,
+  and datapath all plug into it. (It is a *component*, not one of the 5 pipeline
+  stages: it is read in the Decode stage and written in the Writeback stage.)
+
+- **Structure: two read ports, one write port (2R1W).** Dictated by what a typical
+  instruction needs — `add x3, x1, x2` reads two source registers (rs1, rs2) and
+  writes one destination (rd) in a single cycle. So: 2 read ports + 1 write port.
+
+- **Reads are asynchronous (combinational); writes are synchronous (clocked).**
+  This asymmetry is the core idea:
+  - Writes commit on the rising clock edge, gated by a write-enable, so state
+    changes only at a controlled, predictable moment.
+  - Reads return data immediately (address in -> data out, no clock) because the
+    ALU needs the operands *within* the same cycle to compute on them.
+  - Saw this directly in the waveform: stored register values change only on a
+    clock edge, while read outputs follow the address instantly.
+
+- **x0 is hardwired to zero** — always reads as 0 and can never be written. Useful
+  as a free constant zero, for padding, and for discarding a result. Enforced in
+  hardware two ways: return 0 on a read of address 0, and block the write when the
+  destination address is 0.
+
+- Address width is **5 bits** (`[4:0]`) because 2^5 = 32 registers; data width is
+  32 bits.
+
+- **Testbench writing.** Self-checking tests print PASS/FAIL to the Tcl console,
+  far better than eyeballing waveforms. The testbench is a reusable **skeleton**:
+  the clock generator, error counter, self-checking task, and summary stay fixed;
+  only the DUT-specific signals, instantiation, and stimulus change per module.
+  Key habit: use `!==` (4-state compare) in checks so uninitialized (X) values are
+  caught, and align stimulus to clock edges (set inputs on negedge, let posedge
+  capture) to avoid races.
+
+### Bugs / gotchas
+
+- A testbench goes in **Simulation Sources**, not Design Sources — it must never be
+  synthesized (it contains `#` delays, `$display`, `initial` stimulus).
+- A standalone module shows as "not used in any module" in the design hierarchy
+  until something instantiates it — expected and fine. For simulation, the
+  testbench becomes the top and instantiates the DUT directly.
+
+### Result
+
+All tests pass in XSim: write/read-back, x0-stays-zero, write-enable gating, and
+independent dual-port reads. Read-async / write-sync behavior confirmed in the
+waveform.
+
 ### Next
 
-Begin the single-cycle RV32I datapath — register file and ALU first.
+Build the ALU (combinational: two 32-bit operands + an op-select -> 32-bit result).
+Writing the RTL myself from spec this time.
