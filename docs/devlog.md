@@ -176,3 +176,53 @@ pairs that actually prove correctness:
 - SLT vs SLTU on `0xFFFFFFFF` < `1`: `1` (signed, −1<1) vs `0` (unsigned, huge≥1).
 
 
+---
+
+## Day 4 — Immediate Generator
+
+**Goal:** build the unit that extracts the immediate constant baked into an
+instruction, reassembles its scattered bits, and sign-extends to 32 bits.
+
+### What I learned
+
+- Combinational, like the ALU: 32-bit instruction + a format-select code in, a
+  32-bit immediate out. Built with `always_comb` + `case`, one arm per format.
+- **Five immediate formats** (I, S, B, U, J — R-type has no immediate). RISC-V keeps
+  the register fields (rs1/rs2/rd) in fixed positions across all formats for simpler
+  decode hardware; the cost is that the immediate bits get scattered into whatever
+  positions are left, differently per format. The generator un-scrambles them.
+- **`inst[31]` is the sign bit in every signed format** — placed there deliberately
+  so sign-extension hardware is uniform.
+- Built immediates with concatenation `{}` (glue scattered slices in order, MSB
+  first) and sign-extension via replication `{N{inst[31]}}`, where N = 32 − (imm
+  width). The bit-counting rule: **every concatenation must total exactly 32 bits.**
+- B and J: the top immediate bit equals the sign bit, so `inst[31]` plays two roles
+  (replicated for sign-extension AND placed as the explicit top bit). Collapsing
+  them gives the same value only because the bits are adjacent — but writing it
+  explicitly matches the spec and is more honest/readable.
+
+### Bugs hit & fixed
+
+- **S-type sign-extension off by one:** used `{19{inst[31]}}` instead of `{20{}}`
+  (S immediate is 12 bits → needs 20 sign bits, not 19). Symptom was telling: the
+  negative S test gave `0x7FFFFFFE` instead of `0xFFFFFFFE` — wrong in *only* the top
+  bit, the signature of a too-short sign-extension. The positive S test passed and
+  hid it, because a positive immediate has a 0 in the sign bit. Confirms why every
+  format needs a **negative** test case — only a negative value exercises sign-
+  extension.
+- U-type: first wrote `"000000000000"` (a string literal = ASCII codes) instead of
+  `12'b0` (a sized literal). Strings are not bit vectors.
+
+### Verification
+
+Self-checking testbench, each format tested with a positive and a negative
+immediate, plus U. Test instructions crafted by working backwards: pick the target
+immediate, place its bits into the positions that format dictates. All 9 pass.
+
+### Next
+
+Instruction decoder — split a 32-bit instruction into opcode/funct fields and
+rs1/rs2/rd, and generate the control signals (ALU op, immediate format, etc.) that
+drive the register file, ALU, and immediate generator. This is the piece that ties
+the three existing modules together.
+
