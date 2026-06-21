@@ -219,10 +219,66 @@ Self-checking testbench, each format tested with a positive and a negative
 immediate, plus U. Test instructions crafted by working backwards: pick the target
 immediate, place its bits into the positions that format dictates. All 9 pass.
 
-### Next
+---
 
-Instruction decoder — split a 32-bit instruction into opcode/funct fields and
-rs1/rs2/rd, and generate the control signals (ALU op, immediate format, etc.) that
-drive the register file, ALU, and immediate generator. This is the piece that ties
-the three existing modules together.
+## Day 5 — Instruction Decoder
+
+**Goal:** build the decoder — the unit that reads a 32-bit instruction and produces
+the control signals that drive the register file, ALU, and immediate generator. This
+is the piece that ties the three existing modules together.
+
+### What I learned
+
+- The decoder does two jobs: **field extraction** (pure bit-slicing of the
+  fixed-position fields) and **control generation** (deciding what every other module
+  should do). Combinational — instruction in, control signals out.
+- **Fixed fields, always in the same positions** (this is what the immediate
+  scrambling bought us): `opcode=inst[6:0]`, `rd=inst[11:7]`, `funct3=inst[14:12]`,
+  `rs1=inst[19:15]`, `rs2=inst[24:20]`, `funct7=inst[31:25]`. Extracted with simple
+  `assign`s.
+- **Control signals generated:** `reg_write` (write the destination register?),
+  `alu_src` (ALU 2nd operand from rs2 or immediate?), `imm_sel` (which immediate
+  format), `alu_op` (which ALU operation).
+- **The two signals that test understanding of what an instruction *does*:**
+  - `reg_write = 0` for **store and branch** — they don't produce a register result
+    (store writes memory; branch only decides whether to jump). Everything else writes.
+  - `alu_src = 0` (register) for R-type and branch (operate on two registers);
+    `= 1` (immediate) for everything that folds in a constant (I-ALU, load, store).
+- **`alu_src` polarity is a chosen convention** (0=register, 1=immediate), not a law —
+  it just has to match the datapath mux that obeys it.
+- **funct3/funct7 sub-decode for `alu_op`:** opcode gives the instruction class, but
+  funct3 (and funct7 for two cases) picks the exact ALU op. `funct7[5]` distinguishes
+  ADD/SUB and SRL/SRA (1 = the SUB/arithmetic variant). Done with a nested `case(func3)`.
+- **R-type vs I-ALU decode differ in two spots** (don't blind-copy): I-type `funct3=000`
+  is always ADD (no "subtract immediate" exists), and for shift-immediates the upper
+  immediate bits act as a funct7-like selector for SRLI/SRAI.
+
+### Design pattern reinforced
+
+Set **defaults for every control signal at the top of the `always_comb`**, before the
+`case`. Each opcode arm then overrides only what differs. Prevents inferred latches and
+keeps each arm short.
+
+### Bugs hit & fixed
+
+- LUI initially decoded as I-format (`imm_sel=I`) — it's **U-format**. The first two
+  control signals look like an I-ALU instruction, but the immediate is encoded
+  completely differently (upper 20 bits), so it needed `imm_sel=U`.
+- SRL/SRA ternary polarity inverted relative to the (correct) ADD/SUB line — the two
+  `funct7[5]` ternaries must have the same polarity (1 = special variant). Caught by
+  comparing against the working ADD/SUB arm.
+
+### Verification
+
+Self-checking testbench feeding 12 real assembled instructions, checking all four
+control signals each. Deliberately targets the bug-prone spots: add-vs-sub and
+srl-vs-sra (prove the funct7 decode), srai (I-type shift funct7), and sw/beq (prove
+reg_write correctly drops to 0). All pass.
+
+### Status
+
+All four datapath building blocks done and verified: register file, ALU, immediate
+generator, decoder.
+
+
 
