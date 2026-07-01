@@ -280,5 +280,76 @@ reg_write correctly drops to 0). All pass.
 All four datapath building blocks done and verified: register file, ALU, immediate
 generator, decoder.
 
+---
 
+## Day 6 — Single-Cycle Core (Integration)
+
+**Goal:** wire the four building blocks (register file, ALU, immediate generator,
+decoder) plus two new modules (program counter, instruction memory) into a top-level
+`core` that fetches and executes a real program end to end.
+
+### New modules written
+
+- **Program counter (`pc`)** — my first sequential module since the register file.
+  Holds the current instruction address; on each clock edge it either resets to 0 or
+  advances by 4. Key concepts: it is `always_ff` (not `always_comb`) because it holds
+  state across cycles, and it uses a **synchronous reset** (checked inside the clocked
+  block, so it takes effect on the clock edge). Advances by **4**, not 1, because
+  RV32I instructions are 4 bytes and memory is byte-addressed.
+- **Instruction memory (`imem`)** — read-only, combinational lookup: address in,
+  instruction out. Preloaded with a hand-assembled 4-instruction test program via an
+  `initial` block (scaffolding — will later move to `$readmemh` from a hex file so the
+  core can run arbitrary assembled programs, then eventually a runtime loader).
+  - **Word vs byte addressing:** the PC counts in bytes (0, 4, 8, 12) but the memory
+    array is indexed by word (0, 1, 2, 3). Indexing with `addr[9:2]` drops the low 2
+    bits = divide by 4 = the byte-address → word-index conversion.
+
+### Integration (the `core` top module)
+
+Pure connection work — instantiate all six modules and wire outputs to inputs with
+internal `logic` wires. The datapath flow: PC → imem (fetch) → decoder + register file
+(decode/read) → alu_src mux → ALU (execute) → back to register file write port
+(writeback). The mux (`assign alu_b = alu_src ? imm : rs2_data;`) picks the ALU's
+second operand: immediate or rs2, per the decoder's `alu_src`.
+
+Method takeaway: derive the wire list by walking every sub-module's ports — each port
+either connects to a core port (clk/rst) or to an internal wire, and two connected
+ports share one wire. Ports connect by name even when the two sides are named
+differently (e.g. decoder `reg_write` → register file `rd_we`).
+
+### Bugs hit & fixed
+
+- **`clc` vs `clk` typo** (again) in the core's clock port and two instantiations —
+  same one-character class of bug as the Day 1 XDC cascade. Port names must match the
+  sub-module's declaration exactly.
+- **Reset stuck high:** first run showed `rst` asserted for the whole simulation, so
+  the PC never advanced past instruction 0 — only the combinational decode of the
+  first instruction was visible, no writes ever happened. Cause was the testbench not
+  deasserting reset. Fix: ensure the testbench drives `rst = 1` briefly then `rst = 0`
+  to release. Lesson: a PC frozen at 0 with a solid-high reset is the signature of a
+  reset that never releases.
+
+### Verification
+
+Confirmed in simulation: `pc_addr` steps 0 → 4 → 8 → C; each instruction fetches and
+decodes correctly; `alu_src` flips 1→1→0→0 (immediate for the addis, register for
+add/sub); `alu_op` goes 0→0→0→1 (ADD, ADD, ADD, SUB); and `alu_result` produces
+**5, 3, 8, 2** — the correct program output.
+
+Notes: immediate garbage on the R-type instructions is harmless because `alu_src=0`
+makes the mux ignore it (a "wrong value that doesn't matter because it isn't selected").
+`XXXXXXXX` after the 4th instruction is just execution running past the loaded program
+into uninitialized memory.
+
+### Status
+
+**Working single-cycle RV32I core** — fetches, decodes, reads registers, executes in
+the ALU, and writes back, producing correct results for a real instruction sequence.
+
+### Next
+
+Extend instruction support (branches/jumps need the PC to take a computed target, not
+just +4; loads/stores need a data memory), then move toward pipelining. Also migrate
+`imem` from a hardcoded program to `$readmemh` so the core can run assembled programs
+and, eventually, the official riscv-tests suite.
 
