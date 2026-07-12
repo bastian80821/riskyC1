@@ -25,6 +25,7 @@ module core (
     logic alu_src;
     logic [2:0] imm_sel;
     logic branch;
+    logic [2:0] func3;
    
     
     // datapath
@@ -35,11 +36,23 @@ module core (
     logic [31:0] alu_result;
     logic zero_flag;
     logic branch_taken;
+    logic branch_cond;
     logic [31:0]branch_target;
     
     //branch logic
-    assign branch_taken = branch & zero_flag; 
+    always_comb begin
+        case (func3)
+            3'b000:  branch_cond = zero_flag;    // beq:  take if equal
+            3'b001:  branch_cond = ~zero_flag;   // bne:  take if NOT equal
+            default: branch_cond = 1'b0;
+        endcase
+    end
+    
+    //branch is branch flag from op code, branch cond determines if condition is met
+    assign branch_taken = branch & branch_cond;
+    
     assign branch_target = pc_addr + imm;
+    //if we are actually  branching, we go to the branch address, otherwise simply increment.
     assign next_pc = branch_taken ? branch_target : (pc_addr + 32'd4);
     
     //instantiate pc
@@ -81,7 +94,7 @@ module core (
         .rd(rd),
         .rs1(rs1),
         .rs2(rs2),  
-        .func3(), 
+        .func3(func3), 
         .func7(),
         .reg_write(reg_write),
         .imm_sel(imm_sel),
