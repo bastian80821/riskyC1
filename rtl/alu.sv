@@ -8,7 +8,6 @@ module alu(
     input logic [3:0] ctrl, //control signal, selects operation 
     
     output logic [31:0] res, //output result
-    output logic zero_flag
     
     );
     
@@ -41,7 +40,5 @@ module alu(
             default: res = '0;   // REQUIRED - prevents an inferred latch
         endcase
     end
-    
-    assign zero_flag = (res == 32'd0);
     
 endmodule

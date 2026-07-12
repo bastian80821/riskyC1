@@ -82,7 +82,6 @@ module decoder(
         7'b1100011: begin //branch
             imm_sel = 3'd2;
             branch = 1'd1;
-            alu_op = 4'd1;
         end
         
         7'b0110111: begin  //load upper immediate

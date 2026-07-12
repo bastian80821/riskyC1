@@ -346,10 +346,94 @@ into uninitialized memory.
 **Working single-cycle RV32I core** — fetches, decodes, reads registers, executes in
 the ALU, and writes back, producing correct results for a real instruction sequence.
 
+---
+
+## Day 7 — Conditional Branches
+
+**Goal:** teach the core to make decisions. Until now the PC only did +4 — straight-line
+code only, no loops or conditionals.
+
+### The core idea
+
+The PC's next value stops being "always +4" and becomes a **choice**:
+
+```
+next_pc = branch_taken ? branch_target : (pc + 4)
+```
+
+That mux is where control flow lives.
+
+### What I built
+
+- **Refactored `pc.sv`** into a dumb register — it now takes a `next_pc` input and just
+  latches it. The "+4 or branch target" decision moved into the core. Refactored and
+  re-tested *before* adding the feature, so breakage would be unambiguous.
+- **Branch target adder:** `branch_target = pc_addr + imm`. RISC-V branch immediates are
+  **relative offsets**, not absolute addresses — saves instruction bits and makes code
+  position-independent.
+- **Decoder:** new `branch` output (opcode `1100011`); `func3` finally wired to the core.
+- **Dedicated branch comparator:** `br_eq`, `br_lt` (`$signed`), `br_ltu`.
+- **All six branch types** decoded from `func3`.
+
+### Six branches, three comparisons
+
+The pairs are just inversions — `bge` is "NOT less than", `bne` is "NOT equal":
+
+| func3 | inst | condition |
+|-------|------|-----------|
+| 000 | beq  | `br_eq` |
+| 001 | bne  | `~br_eq` |
+| 100 | blt  | `br_lt` |
+| 101 | bge  | `~br_lt` |
+| 110 | bltu | `br_ltu` |
+| 111 | bgeu | `~br_ltu` |
+
+### Design decision: comparator, not the ALU zero flag
+
+First version used the ALU's zero flag (set `alu_op = SUB`; `res == 0` means equal). Works
+for beq/bne, but blt/bge need a *less-than* result the zero flag can't give. Replaced it
+with a dedicated comparator and deleted the zero flag:
+
+- Branch comparison is logically distinct from ALU computation.
+- In a **pipelined** design the branch decision is wanted *earlier* than the ALU result —
+  decoupling now pays off later.
+
+### `branch` must gate everything
+
+`branch_taken = branch & branch_cond`. The **opcode** says "this is a branch"; **func3**
+says "which one." Without the gate, an ordinary `addi` (also `func3 = 000`) could satisfy
+the beq case and trigger a bogus jump.
+
+### Bugs hit & fixed
+
+1. **Duplicate `assign br_eq`** — two drivers on one signal → **X**, which propagated
+   through `branch_cond` → `branch_taken` → the PC mux select → the whole design.
+   *Lesson: when everything goes X at once, suspect one bad signal on a control path.*
+2. **Stray breakpoint** — sim reported `Stopped at time : 0 fs` and never ran a cycle.
+   *Lesson: read the Tcl console before staring at the waveform.*
+3. **`branch` missing from the decoder's defaults block** → inferred latch. Every new
+   control output must be defaulted.
+4. **`logic branch_target[31:0]`** — packed/unpacked again. Dimension goes *before* the
+   name for a bus.
+
+### Verification
+
+Five programs, one per branch type. The pair that actually proves correctness — same bits
+(`x1 = 0xFFFFFFFF`, `x2 = 1`), opposite outcomes:
+
+- `blt` (**signed**): −1 < 1 → **taken**
+- `bltu` (**unsigned**): 4.29e9 ≥ 1 → **not taken**
+
+That's the test that catches a broken `$signed()` cast. Also checked both directions of
+beq/bne — a branch that *always* jumps would pass a taken-only test.
+
+### Status
+
+All six branch types working, signed and unsigned. The core can now run loops and
+conditionals — actual algorithms, not just a fixed list of operations.
+
 ### Next
 
-Extend instruction support (branches/jumps need the PC to take a computed target, not
-just +4; loads/stores need a data memory), then move toward pipelining. Also migrate
-`imem` from a hardcoded program to `$readmemh` so the core can run assembled programs
-and, eventually, the official riscv-tests suite.
+**Jumps (JAL/JALR)** — unconditional, and JAL writes the return address (`pc+4`) to `rd`,
+needing a new writeback mux. This is what makes **function calls** possible.
 

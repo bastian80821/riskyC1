@@ -34,16 +34,28 @@ module core (
     logic [31:0] imm;
     logic [31:0] alu_b;
     logic [31:0] alu_result;
-    logic zero_flag;
     logic branch_taken;
     logic branch_cond;
     logic [31:0]branch_target;
     
+    // dedicated branch comparator
+    
+    logic br_eq, br_lt, br_ltu;          
+    
+    assign br_eq  = (rs1_data == rs2_data);                    // equal?
+    assign br_lt  = ($signed(rs1_data) < $signed(rs2_data));   // less than (signed)
+    assign br_ltu = (rs1_data < rs2_data);                     // less than (unsigned)
+    
+    
     //branch logic
     always_comb begin
         case (func3)
-            3'b000:  branch_cond = zero_flag;    // beq:  take if equal
-            3'b001:  branch_cond = ~zero_flag;   // bne:  take if NOT equal
+            3'b000:  branch_cond =  br_eq;    // beq
+            3'b001:  branch_cond = ~br_eq;    // bne
+            3'b100:  branch_cond =  br_lt;    // blt
+            3'b101:  branch_cond = ~br_lt;    // bge   (>= is NOT <)
+            3'b110:  branch_cond =  br_ltu;   // bltu
+            3'b111:  branch_cond = ~br_ltu;   // bgeu
             default: branch_cond = 1'b0;
         endcase
     end
@@ -84,8 +96,7 @@ module core (
         .ctrl(alu_op),
         .a(rs1_data),
         .b(alu_b),
-        .res(alu_result),
-        .zero_flag(zero_flag)
+        .res(alu_result)
     );
     
     decoder u_decoder (
