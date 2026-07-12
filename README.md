@@ -10,20 +10,20 @@ recorded in the [build log](docs/devlog.md).
 
 ## Status
 
-| Milestone | State |
-|---|---|
-| Board bring-up (blink) | Done |
-| Register file (2R1W, x0 hardwired) | Done |
-| ALU (10 RV32I ops) | Done |
-| Immediate generator (I/S/B/U/J) | Done |
-| Instruction decoder | Done |
-| Single-cycle datapath (executes programs) | Done |
-| Branches / jumps (computed PC targets) | Next |
-| Data memory (loads / stores) | Planned |
-| Load program from hex file (readmemh) | Planned |
-| 5-stage pipeline + hazard/forwarding | Planned |
-| Branch prediction + benchmarks (Dhrystone/CoreMark) | Planned |
-| Verification: riscv-tests, CocoTB, Spike co-sim | Planned |
+|Milestone|State|
+|-|-|
+|Board bring-up (blink)|Done|
+|Register file (2R1W, x0 hardwired)|Done|
+|ALU (10 RV32I ops)|Done|
+|Immediate generator (I/S/B/U/J)|Done|
+|Instruction decoder|Done|
+|Single-cycle datapath (executes programs)|Done|
+|Branches / jumps (computed PC targets)|Done|
+|Data memory (loads / stores)|Next|
+|Load program from hex file (readmemh)|Planned|
+|5-stage pipeline + hazard/forwarding|Planned|
+|Branch prediction + benchmarks (Dhrystone/CoreMark)|Planned|
+|Verification: riscv-tests, CocoTB, Spike co-sim|Planned|
 
 ## Design
 
@@ -37,8 +37,8 @@ rtl/
   pc.sv             Program counter
   imem.sv           Instruction memory
   decoder.sv        Instruction decoder + control
-  register_file.sv  32x32 register file (2R1W)
-  imm_gen.sv        Immediate generator (5 formats)
+  register\_file.sv  32x32 register file (2R1W)
+  imm\_gen.sv        Immediate generator (5 formats)
   alu.sv            ALU (10 RV32I operations)
   core.sv           Top-level datapath (wires it all together)
   blink.sv          Board bring-up test
@@ -53,13 +53,16 @@ exercises edge cases (sign-extension, funct7 decode, x0 handling, etc.).
 Source-only — Vivado's generated files are not committed. Regenerate the project:
 
 1. In Vivado's Tcl console:
-   ```
+
+```
    cd <path-to-repo>
    source scripts/build.tcl
    ```
+
 2. Run synthesis, implementation, and generate bitstream — or run a module's
-   testbench via Run Simulation (set the desired *_tb as simulation top).
+testbench via Run Simulation (set the desired \*\_tb as simulation top).
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
+

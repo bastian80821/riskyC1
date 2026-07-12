@@ -12,7 +12,9 @@ module decoder(
     output logic [2:0] imm_sel,
     output logic [3:0] alu_op,
     output logic  alu_src,
-    output logic branch
+    output logic branch,
+    output logic jmp,
+    output logic jmpr
 
 );
 
@@ -32,6 +34,8 @@ module decoder(
         imm_sel   = 3'd0;       // I-format as a harmless default
         alu_op    = 4'd0;       // ADD placeholder for Pass 1
         branch    = 1'b0;
+        jmp       = 1'b0;
+        jmpr      = 1'b0;
         
         case (opc)
         7'b0110011: begin   // R-type, use func7 and func3 to decode instruction
@@ -93,6 +97,14 @@ module decoder(
         7'b1101111: begin //jump and link
             reg_write = 1'b1;
             imm_sel = 3'd4;
+            jmp = 1'd1;
+            
+        end
+        
+        7'b1100111: begin //jump and link register
+            reg_write = 1'b1;
+            imm_sel = 3'd0;
+            jmpr = 1'd1;           
         end
         
         

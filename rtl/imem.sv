@@ -11,11 +11,11 @@ module imem (
 
     //currently used to load a program
     initial begin
-        imem[0] = 32'hFFF00093;  // addi x1, x0, -1
-imem[1] = 32'h00100113;  // addi x2, x0, 1
-imem[2] = 32'h0020F463;  // bgeu x1, x2, +8    UNSIGNED: huge >= 1 -> TAKEN
-imem[3] = 32'h06300193;  // addi x3, x0, 99    (skipped)
-imem[4] = 32'h02A00213;  // addi x4, x0, 42
+         imem[0] = 32'h008000EF;  // jal  x1, +8      jump to 8, save return addr (4) in x1
+    imem[1] = 32'h06300193;  // addi x3, x0, 99  <-- SKIPPED (jumped over)
+    imem[2] = 32'h02A00213;  // addi x4, x0, 42  <-- "the function body"
+    imem[3] = 32'h00008067;  // jalr x0, x1, 0   RETURN: jump to address in x1
+    imem[4] = 32'h04D00293;  // addi x5, x0, 77  (only reached if return failed)
     end
 
 

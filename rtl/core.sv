@@ -37,6 +37,12 @@ module core (
     logic branch_taken;
     logic branch_cond;
     logic [31:0]branch_target;
+    logic jmp;
+    logic jmpr;
+    logic [31:0] jalr_target;
+    logic [31:0] pc_plus4;
+    logic [31:0] wb_data;
+    logic        take_pc_rel;
     
     // dedicated branch comparator
     
@@ -45,6 +51,7 @@ module core (
     assign br_eq  = (rs1_data == rs2_data);                    // equal?
     assign br_lt  = ($signed(rs1_data) < $signed(rs2_data));   // less than (signed)
     assign br_ltu = (rs1_data < rs2_data);                     // less than (unsigned)
+    assign pc_plus4    = pc_addr + 32'd4;
     
     
     //branch logic
@@ -62,10 +69,17 @@ module core (
     
     //branch is branch flag from op code, branch cond determines if condition is met
     assign branch_taken = branch & branch_cond;
-    
     assign branch_target = pc_addr + imm;
-    //if we are actually  branching, we go to the branch address, otherwise simply increment.
-    assign next_pc = branch_taken ? branch_target : (pc_addr + 32'd4);
+    
+    //jumps
+    
+    assign take_pc_rel = branch_taken | jmp;    // true for normal jals and branching, flase for jalr
+    assign jalr_target = (rs1_data + imm) & ~32'd1;             // return address for jalr
+    
+    
+    assign next_pc = take_pc_rel ? branch_target : (jmpr? jalr_target : pc_plus4); //go to branch address, jal address or increment normally
+    assign wb_data     = (jmp | jmpr) ? pc_plus4 : alu_result; //write return address when jumping, else write alu result
+    
     
     //instantiate pc
     pc u_pc (
@@ -89,7 +103,7 @@ module core (
         .rs2_data(rs2_data),
         .rd_we(reg_write),
         .rd_addr(rd),
-        .rd_data(alu_result)
+        .rd_data(wb_data)
     );
     
     alu u_alu (
@@ -111,7 +125,9 @@ module core (
         .imm_sel(imm_sel),
         .alu_op(alu_op),
         .alu_src(alu_src),
-        .branch(branch)
+        .branch(branch),
+        .jmp(jmp),
+        .jmpr(jmpr)
         
     );
     
