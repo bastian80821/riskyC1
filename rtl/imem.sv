@@ -9,11 +9,13 @@ module imem (
 
     logic [31:0] imem [0:255];   // 256 words of instruction memory for small test program
 
+    //currently used to load a program
     initial begin
-        imem[0] = 32'h00500093;  // addi x1, x0, 5
-        imem[1] = 32'h00300113;  // addi x2, x0, 3
-        imem[2] = 32'h002081B3;  // add  x3, x1, x2
-        imem[3] = 32'h40208233;  // sub  x4, x1, x2
+        imem[0] = 32'h00500093;  // addi x1, x0, 5     x1 = 5
+        imem[1] = 32'h00500113;  // addi x2, x0, 5     x2 = 5
+        imem[2] = 32'h00208463;  // beq  x1, x2, +8    if equal, skip next
+        imem[3] = 32'h06300193;  // addi x3, x0, 99    <-- should be SKIPPED
+        imem[4] = 32'h02A00213;  // addi x4, x0, 42    x4 = 42
     end
 
 

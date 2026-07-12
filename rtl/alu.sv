@@ -7,7 +7,8 @@ module alu(
     input logic [31:0] b, //data input 2
     input logic [3:0] ctrl, //control signal, selects operation 
     
-    output logic [31:0] res //output result
+    output logic [31:0] res, //output result
+    output logic zero_flag
     
     );
     
@@ -25,20 +26,22 @@ module alu(
     
     
     always_comb begin
-    case (ctrl)
-        ALU_ADD: res = a + b; 
-        ALU_SUB: res = a - b;
-        ALU_AND: res = a & b;
-        ALU_OR: res = a | b;
-        ALU_XOR: res = a ^ b;
-        ALU_SLL: res = a << b[4:0]; //shifting by max of 32 bits which is b[4:0]
-        ALU_SRL: res = a >> b[4:0]; //shifting by max of 32 bits which is b[4:0]
-        ALU_SRA: res = $signed(a) >>> b[4:0]; //cast makes a signed first
-        ALU_SLT: res = ($signed(a) < $signed(b)) ? 32'd1 : 32'd0;
-        ALU_SLTU: res = (a < b) ? 32'd1 : 32'd0;
- 
-        default: res = '0;   // REQUIRED - prevents an inferred latch
-    endcase
-end
+        case (ctrl)
+            ALU_ADD: res = a + b; 
+            ALU_SUB: res = a - b;
+            ALU_AND: res = a & b;
+            ALU_OR: res = a | b;
+            ALU_XOR: res = a ^ b;
+            ALU_SLL: res = a << b[4:0]; //shifting by max of 32 bits which is b[4:0]
+            ALU_SRL: res = a >> b[4:0]; //shifting by max of 32 bits which is b[4:0]
+            ALU_SRA: res = $signed(a) >>> b[4:0]; //cast makes a signed first
+            ALU_SLT: res = ($signed(a) < $signed(b)) ? 32'd1 : 32'd0;
+            ALU_SLTU: res = (a < b) ? 32'd1 : 32'd0;
+     
+            default: res = '0;   // REQUIRED - prevents an inferred latch
+        endcase
+    end
+    
+    assign zero_flag = (res == 32'd0);
     
 endmodule

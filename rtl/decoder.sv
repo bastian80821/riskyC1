@@ -11,7 +11,8 @@ module decoder(
     output logic reg_write,
     output logic [2:0] imm_sel,
     output logic [3:0] alu_op,
-    output logic  alu_src
+    output logic  alu_src,
+    output logic branch
 
 );
 
@@ -30,9 +31,9 @@ module decoder(
         alu_src   = 1'b0;
         imm_sel   = 3'd0;       // I-format as a harmless default
         alu_op    = 4'd0;       // ADD placeholder for Pass 1
-    
+        branch    = 1'b0;
+        
         case (opc)
-    
         7'b0110011: begin   // R-type, use func7 and func3 to decode instruction
             case (func3)
                  3'b000: alu_op = (func7[5]) ? 4'd1 : 4'd0;  // SUB or ADD depending on func7
@@ -80,6 +81,8 @@ module decoder(
         
         7'b1100011: begin //branch
             imm_sel = 3'd2;
+            branch = 1'd1;
+            alu_op = 4'd1;
         end
         
         7'b0110111: begin  //load upper immediate
