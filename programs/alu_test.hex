@@ -1,0 +1,11 @@
+// alu_test.hex - basic ALU ops
+// addi x1, x0, 5
+00500093
+// addi x2, x0, 3
+00300113
+// add  x3, x1, x2     x3 = 8
+002081B3
+// sub  x4, x1, x2     x4 = 2
+40208233
+// addi x0, x0, 0      nop
+00000013

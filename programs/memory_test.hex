@@ -1,0 +1,11 @@
+// memory_test.hex - store/load round trip
+// addi x1, x0, 42     x1 = 42 (value to store)
+02A00093
+// addi x2, x0, 8      x2 = 8  (word-aligned address)
+00800113
+// sw   x1, 0(x2)      mem[8] = 42
+00112023
+// lw   x3, 0(x2)      x3 = mem[8]  -> should be 42
+00012183
+// addi x0, x0, 0      nop
+00000013
