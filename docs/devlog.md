@@ -427,13 +427,97 @@ Five programs, one per branch type. The pair that actually proves correctness �
 That's the test that catches a broken `$signed()` cast. Also checked both directions of
 beq/bne — a branch that *always* jumps would pass a taken-only test.
 
-### Status
 
-All six branch types working, signed and unsigned. The core can now run loops and
-conditionals — actual algorithms, not just a fixed list of operations.
 
-### Next
+Day 8 — Memory, File-Loaded Programs, LUI/AUIPC, and a Regression Suite
+Goal: close out everything before the pipeline — data memory, loading programs from
+files, the remaining U-type instructions, and (most importantly) an automated test
+harness so pipeline work is verifiable.
+Data memory (loads / stores)
+New module `dmem.sv` — structurally very close to the register file: synchronous write
+gated by an enable, combinational read, word array indexed with `addr[9:2]`.
+The address is free: `lw`/`sw` were already configured with `alu_src=1` and
+`alu_op=ADD`, so `alu_result` is `rs1 + imm`, the memory address. No new adder.
+Store data comes from `rs2_data`, bypassing the ALU entirely — in `sw rs2, off(rs1)`,
+rs1 is the base address and rs2 is the value to store.
+Read is combinational, deliberately. A single-cycle core needs the loaded value to
+reach the register file's write port in the same cycle. A registered (synchronous)
+read would arrive a cycle late and require a stall. Real BRAM prefers a registered
+read, which is part of why pipelined CPUs have a separate MEM stage — memory access
+genuinely takes a cycle.
+Decoder: added `mem_read` / `mem_write` (and to the defaults block).
+Writeback mux extended to select `mem_rdata` for loads.
+Harvard architecture
+Separate `imem` and `dmem`, each with its own address port. This is what makes
+single-cycle execution possible: `lw` needs to fetch an instruction and load data in
+the same cycle, which one memory with one port can't do. Real systems use unified main
+memory (von Neumann) but split L1 instruction/data caches — Harvard at the core level for
+exactly this reason.
+Programs from hex files (`$readmemh`)
+Replaced the hardcoded `initial` block in `imem` with a zero-loop plus
+`$readmemh("...hex", imem)`. Programs now live in `programs/*.hex`, one 32-bit hex word
+per line, `//` comments allowed.
+This is the unlock for everything downstream — real assembled programs, ISA test suites,
+benchmarks. Xilinx also supports `$readmemh` for synthesis (it initializes BRAM in the
+bitstream), so it works on hardware too.
+Order matters: zero the array first, then overlay the program. `$readmemh` only fills as
+many words as the file has lines; without the zero-init, running past the end of the
+program hits X and the whole design goes undefined.
+Known limitation: the path in `imem.sv` is currently absolute, so the repo is not
+portable as-is. Relative paths resolve against the simulator's working directory
+(`build/*.sim/sim_1/behav/xsim/`), which is inside the gitignored build folder. Proper fix
+is to add the hex file to the project as a data file so a bare filename resolves.
+LUI / AUIPC
+LUI writes the 20-bit immediate into the upper bits of `rd` (lower 12 zeroed). The
+imm_gen already produces exactly this for U-format; it just needed routing to writeback.
+Exists because RV32I immediates are only 12 bits — `lui` + `addi` is the idiom for
+loading any 32-bit constant.
+AUIPC computes `pc + imm`, used for PC-relative addressing and (with `jalr`)
+long-range jumps.
+Chose to add writeback mux inputs rather than route these through the ALU. More
+explicit — each instruction's result comes from a clearly labelled source — and it avoided
+adding an operand mux on the ALU's `a` input (which AUIPC would need, since `a` is
+hardwired to `rs1_data`). Nice reuse: AUIPC's `pc + imm` is already computed by the
+`branch_target` adder, so no new hardware.
+The writeback mux is now 5-way: `pc_plus4` (jumps), `mem_rdata` (loads), `imm` (LUI),
+`branch_target` (AUIPC), `alu_result` (everything else).
+Self-checking regression suite (the important part)
+Built a real `core_tb` that runs multiple programs and asserts on the results, printing
+PASS/FAIL — no waveform reading.
+Two new techniques:
+Hierarchical references — the testbench reaches into the design to inspect and
+modify state: `dut.u_register_file.regs[3]`, `dut.u_imem.imem[i]`, `dut.pc_addr`.
+Simulation-only, and the standard way to check internals without adding debug ports.
+The testbench loads the program, via `$readmemh(prog, dut.u_imem.imem)` inside a
+`run_program()` task that also clears imem/dmem/regs and cycles reset. This is what lets
+one simulation run test five different programs with no RTL edits.
+Coverage: ALU ops, store+load round trip, branch taken/not-taken, jal+jalr call/return,
+lui+auipc. 16 checks, all passing.
+Why this matters now: pipelining is a major restructuring of the entire datapath and
+will be iterated on for weeks. Manually inspecting waveforms after every change is slow
+and misses regressions. This suite turns "did I break anything?" into one command.
+Bugs / lessons
+My own test was wrong before the core was. The jump test checked "x3 stayed 0", but
+that program loops (jalr returns to addr 4, which then executes the skipped
+instruction), so x3 legitimately becomes 99 after one pass. Fixed by running exactly 3
+cycles and checking `pc == 4` instead — verifying the thing I actually care about
+(did the return land correctly) rather than a side effect of it. Lesson: a self-checking
+test needs precision about what state and when.
+Cycle counts matter per program. Straight-line programs can overshoot harmlessly
+(they fall into zeroed memory and execute nops); looping programs must be counted
+exactly. A more robust harness would have programs signal completion rather than using
+fixed counts.
+Trailing comma in `alu.sv`'s port list (left over from deleting `zero_flag`) caused a
+syntax error, which made the module unresolvable — showing as `u_alu : xil_defaultlib.alu`
+with a `?` in the hierarchy. Regenerating the project via `build.tcl` did not fix it:
+project regeneration repairs lost file references, but can't fix a syntax error in the
+source. Two different failure modes.
+`$readmemh` fails quietly. A missing file gives a console warning and leaves memory
+zeroed, so the core executes nops and looks like it's running. Signature: `inst` is
+always `00000000` and the PC just marches +4. The regression suite caught this
+immediately on one test and named the file — much faster than waveform archaeology.
+Wrong hand-assembled test instructions cost real time: `0010a023` is `sw x1, 0(x1)`, not
+`sw x1, 0(x2)` — one hex digit in the rs1 field. Encodings are now generated
+programmatically rather than written by hand.
 
-**Jumps (JAL/JALR)** — unconditional, and JAL writes the return address (`pc+4`) to `rd`,
-needing a new writeback mux. This is what makes **function calls** possible.
 

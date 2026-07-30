@@ -7,7 +7,7 @@ module alu(
     input logic [31:0] b, //data input 2
     input logic [3:0] ctrl, //control signal, selects operation 
     
-    output logic [31:0] res, //output result
+    output logic [31:0] res //output result
     
     );
     

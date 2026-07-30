@@ -28,6 +28,7 @@ module core (
     logic [2:0] func3;
     logic mem_read;
     logic mem_write;
+    logic lui, auipc;
     
     // datapath
     logic [31:0] rs1_data;
@@ -81,9 +82,11 @@ module core (
     
     
     assign next_pc = take_pc_rel ? branch_target : (jmpr? jalr_target : pc_plus4); //go to branch address, jal address or increment normally
-    assign wb_data = (jmp | jmpr) ? pc_plus4       // jumps: save return address
-               : mem_read     ? mem_rdata      // loads: data from memory
-               :                alu_result;    // everything else: ALU output
+    assign wb_data = (jmp | jmpr) ? pc_plus4         // jumps: return address
+                   : mem_read     ? mem_rdata        // loads: data from memory
+                   : lui          ? imm              // LUI: the immediate itself
+                   : auipc        ? branch_target    // AUIPC: pc + imm
+                   :                alu_result;      // everything else
     
     
     //instantiate pc
@@ -134,7 +137,9 @@ module core (
         .jmp(jmp),
         .jmpr(jmpr),
         .mem_read(mem_read),
-        .mem_write(mem_write)
+        .mem_write(mem_write),
+        .lui(lui),
+        .auipc(auipc)
         
     );
     

@@ -16,7 +16,9 @@ module decoder(
     output logic jmp,
     output logic jmpr,
     output logic mem_read,
-    output logic mem_write
+    output logic mem_write,
+    output logic        lui,
+    output logic        auipc
 
 );
 
@@ -40,6 +42,8 @@ module decoder(
         jmpr      = 1'b0;
         mem_read  = 1'b0;
         mem_write = 1'b0;
+        lui   = 1'b0;
+        auipc = 1'b0;
         
         case (opc)
         7'b0110011: begin   // R-type, use func7 and func3 to decode instruction
@@ -95,10 +99,10 @@ module decoder(
             branch = 1'd1;
         end
         
-        7'b0110111: begin  //load upper immediate
+        7'b0110111: begin  // Load upper immediate
             reg_write = 1'b1;
-            alu_src = 1'b1;
-            imm_sel = 3'd3;
+            imm_sel   = 3'd3;   // U-format
+            lui       = 1'b1;
         end
         
         7'b1101111: begin //jump and link
@@ -112,6 +116,12 @@ module decoder(
             reg_write = 1'b1;
             imm_sel = 3'd0;
             jmpr = 1'd1;           
+        end
+        
+        7'b0010111: begin  // AUIPC
+            reg_write = 1'b1;
+            imm_sel   = 3'd3;   // U-format
+            auipc     = 1'b1;
         end
         
         

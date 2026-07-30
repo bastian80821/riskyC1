@@ -13,7 +13,6 @@ module imem (
     initial begin
     for (int i = 0; i < 256; i++) imem[i] = 32'd0;
         $readmemh("C:/Users/Bmars/Desktop/riskyC1/riskyC1/riscyC1/programs/alu_test.hex", imem); //ABSOLUTE PATH
-
     end
 
 
