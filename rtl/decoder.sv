@@ -14,7 +14,9 @@ module decoder(
     output logic  alu_src,
     output logic branch,
     output logic jmp,
-    output logic jmpr
+    output logic jmpr,
+    output logic mem_read,
+    output logic mem_write
 
 );
 
@@ -36,6 +38,8 @@ module decoder(
         branch    = 1'b0;
         jmp       = 1'b0;
         jmpr      = 1'b0;
+        mem_read  = 1'b0;
+        mem_write = 1'b0;
         
         case (opc)
         7'b0110011: begin   // R-type, use func7 and func3 to decode instruction
@@ -76,11 +80,14 @@ module decoder(
             reg_write = 1'b1;
             alu_src = 1'b1;
             imm_sel = 3'd0;
+            mem_read = 1'b1;
+            
         end
         
-        7'b0100011: begin //load reg->mem
+        7'b0100011: begin //store reg->mem
             alu_src = 1'b1;
             imm_sel = 3'd1;
+            mem_write = 1'b1;
         end
         
         7'b1100011: begin //branch

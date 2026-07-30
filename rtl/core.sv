@@ -26,7 +26,8 @@ module core (
     logic [2:0] imm_sel;
     logic branch;
     logic [2:0] func3;
-   
+    logic mem_read;
+    logic mem_write;
     
     // datapath
     logic [31:0] rs1_data;
@@ -43,6 +44,8 @@ module core (
     logic [31:0] pc_plus4;
     logic [31:0] wb_data;
     logic        take_pc_rel;
+    logic [31:0] mem_rdata;
+    
     
     // dedicated branch comparator
     
@@ -78,7 +81,9 @@ module core (
     
     
     assign next_pc = take_pc_rel ? branch_target : (jmpr? jalr_target : pc_plus4); //go to branch address, jal address or increment normally
-    assign wb_data     = (jmp | jmpr) ? pc_plus4 : alu_result; //write return address when jumping, else write alu result
+    assign wb_data = (jmp | jmpr) ? pc_plus4       // jumps: save return address
+               : mem_read     ? mem_rdata      // loads: data from memory
+               :                alu_result;    // everything else: ALU output
     
     
     //instantiate pc
@@ -127,7 +132,9 @@ module core (
         .alu_src(alu_src),
         .branch(branch),
         .jmp(jmp),
-        .jmpr(jmpr)
+        .jmpr(jmpr),
+        .mem_read(mem_read),
+        .mem_write(mem_write)
         
     );
     
@@ -137,7 +144,14 @@ module core (
         .imm(imm)
     );
     
-    
+    dmem u_dmem(
+        .clk(clk), 
+        .addr(alu_result),
+        .w_e(mem_write),
+        .w_data(rs2_data), //memory writes to rs2
+        .r_data(mem_rdata)
+        
+    );
     
     //mux to select between immediate and rs2 for alu input
     assign alu_b = alu_src ? imm : rs2_data;
