@@ -29,6 +29,8 @@ module core (
     logic mem_read;
     logic mem_write;
     logic lui, auipc;
+    logic jmp;
+    logic jmpr;
     
     // datapath
     logic [31:0] rs1_data;
@@ -39,8 +41,6 @@ module core (
     logic branch_taken;
     logic branch_cond;
     logic [31:0]branch_target;
-    logic jmp;
-    logic jmpr;
     logic [31:0] jalr_target;
     logic [31:0] pc_plus4;
     logic [31:0] wb_data;
