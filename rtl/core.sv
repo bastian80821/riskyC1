@@ -153,7 +153,7 @@ module core (
         .clk(clk), 
         .addr(alu_result),
         .w_e(mem_write),
-        .w_data(rs2_data), //memory writes to rs2
+        .w_data(rs2_data), //rs2 writes to memory
         .r_data(mem_rdata)
         
     );

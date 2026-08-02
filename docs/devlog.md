@@ -550,3 +550,118 @@ Single-cycle core now runs the full RV32I integer datapath end to end — arithm
 and logic, immediates, loads/stores, all six branches, jal/jalr, and LUI/AUIPC — from
 file-loaded programs, guarded by an automated regression suite. Feature-complete and
 regression-guarded, ready for the pipeline restructure.
+
+
+---
+
+## Day 9 — Pipelining, Step 1: Splitting the Datapath
+
+**Goal:** convert the single-cycle core into a 5-stage pipeline. This step inserts the
+pipeline registers only — no hazard handling — so the hazards show up as concrete test
+failures rather than abstractions.
+
+### Why pipeline
+
+In the single-cycle core, the clock period must cover the *entire* path of the slowest
+instruction: fetch, decode, register read, ALU, memory, writeback. Everything else sits
+idle while one part works.
+
+Cutting the datapath into five stages with registers between them means the clock only
+has to cover the **slowest single stage**, and five instructions can be in flight at
+once — one per stage. Much higher clock, roughly one instruction retired per cycle.
+
+### The design work is a paper exercise
+
+The mechanical rule: **for each stage boundary, what does everything to the right need
+that is produced to the left?** Those signals need a pipeline register.
+
+Easiest done backwards, starting from WB. Each register carries what its own stage needs
+*plus* everything all later stages need — signals don't teleport, they ride the pipeline.
+
+| Register | Contents | Notes |
+|---|---|---|
+| IF/ID | inst, pc_addr, pc_plus4 | smallest — control signals don't exist yet |
+| ID/EX | ~19 signals | fattest — everything the decoder just produced |
+| EX/MEM | 13 signals | alu_result + the writeback mux inputs/selects |
+| MEM/WB | wb_data, rd, reg_write | 38 bits — the mux has collapsed 5 candidates to 1 |
+
+### Key realisations
+
+- **A signal is carried if and only if it is produced in one stage and consumed in a
+  later one.** `imm_sel` is generated *and* used in ID, so it never enters a pipeline
+  register. Everything else the decoder produces travels somewhere.
+- **`reg_write` isn't one signal any more — it's four.** Five instructions are in flight,
+  each needing its own copy of every control signal, so `reg_write` becomes
+  `exe_reg_write` / `mem_reg_write` / `wb_reg_write`. A single "hold it until needed"
+  register wouldn't work: it would be overwritten by the next instruction to decode.
+  A pipeline register is a **conveyor belt**, not storage.
+- **`rd` and `wb_rd` are the same signal for different instructions.** `rd` belongs to the
+  instruction in ID; `wb_rd` to the one in WB, four instructions earlier. The stage prefix
+  identifies *which instruction* you're talking about.
+- **Two paths flow backward**, and both are where hazards come from:
+  - EX → IF: `take_pc_rel`, `branch_target`, `jalr_target` reach the PC mux
+  - WB → ID: the register file's write port
+- **Reset clears the pipeline registers to zero**, which decodes as opcode 0 → the
+  decoder's `default` case → all control signals off. That's a **bubble**. The same
+  mechanism will be reused for flushing.
+
+### Design decisions
+
+- **Branches resolve in EX**, not ID. Resolving in ID would flush only 1 instruction
+  instead of 2, but it lengthens ID's critical path (register read → comparator →
+  decision → PC mux) and complicates forwarding. Chose the simpler option first;
+  moving it to ID later is a measurable optimisation with a clear before/after.
+- **Writeback mux resolves in MEM**, so MEM/WB carries one 32-bit result instead of five
+  values plus five selects (~165 fewer flip-flops, and WB becomes trivially short). The
+  tradeoff is mux delay in series with the dmem read. If MEM turns out to be the critical
+  path, moving the mux to WB is the fix — WB has enormous slack. **To revisit after
+  synthesis and a timing report**, rather than guessing now.
+- **Operand mux resolves in EX**, the opposite call — carry `rs2_data`, `imm`, `alu_src`
+  separately rather than pre-muxing in ID. Forwarding has to inject values immediately
+  before the ALU, and it replaces the *register* operand, not the immediate. Pre-muxing
+  would collapse them into one wire and make that impossible.
+
+### Bug found by reasoning, not by testing
+
+The register file is **read in ID and written in WB**. With a synchronous write and a
+combinational read, an ID-stage read of a register being written that same cycle returns
+the **stale** value. That fires at any dependency distance of 3 — common in real code.
+
+Fixed by making the register file **write-first**: if a read address matches the write
+address and the write is enabled, return the incoming write data instead of the stored
+value. Three lines, handled once at the source for both read ports, rather than adding
+comparators and mux inputs to the forwarding network later. (x0 check stays first in the
+priority chain.)
+
+Harmless to the single-cycle core, confirmed by re-running its regression suite: still
+16/16.
+
+### Result: correctly broken
+
+Ran the regression suite against the pipelined core — **11/16 pass, 5 fail**, and every
+failure is a predicted hazard:
+
+- **`add x3, x1, x2` → x3 = 0.** The two `addi`s were still in MEM and WB when the `add`
+  reached EX, so it read stale zeros. Textbook RAW data hazard.
+- **`sub x4, x1, x2` → x4 = 5.** Instructive: by then `addi x1` had *just* reached WB, so
+  the new write-first bypass delivered x1 = 5 correctly — but x2 was one stage behind and
+  read 0. So 5 − 0 = 5. The fix works; dependency *distance* is what decides.
+- **Store/load test** — same cause, operands not ready.
+- **`x3 = 0x63` on the branch test.** The instruction the taken branch should have skipped
+  **executed anyway** — it was already in the pipeline when the branch resolved in EX, and
+  nothing flushed it. Concrete proof of the 2-instruction branch penalty.
+- Tests 4 and 5 pass because those programs happen to have no back-to-back dependencies.
+
+Also: the pipeline needs ~4 extra cycles to drain, so every test's cycle count had to
+increase (6 → 12).
+
+### Next
+
+**Step 2: forwarding.** When EX needs a register that MEM or WB is about to write, the
+value already exists in a pipeline register — route it straight to the ALU input instead
+of using the stale register-file read. Needs a forwarding unit comparing `exe_rs1`/
+`exe_rs2` against `mem_rd`/`wb_rd`, plus two muxes in front of the ALU. Should fix
+Tests 1 and 2.
+
+Then Step 3 (load-use stall — the one case forwarding can't fix, since data can't move
+backward in time) and Step 4 (branch flushing).

@@ -23,7 +23,15 @@ module register_file (
             regs[rd_addr] <= rd_data;
     end
     
-    assign rs1_data = (rs1_addr == 5'd0) ? 32'd0 : regs[rs1_addr]; //read data into port 1 given an address
-    assign rs2_data = (rs2_addr == 5'd0) ? 32'd0 : regs[rs2_addr]; //read data into port 2 given an address
+    // Combinational reads, with write-first bypass: if this cycle's write
+    // targets the register being read, return the incoming data instead of
+    // the stored value (the stored value doesn't update until the clock edge).
+    assign rs1_data = (rs1_addr == 5'd0)                        ? 32'd0
+                    : (rd_we && (rd_addr == rs1_addr))          ? rd_data
+                    :                                             regs[rs1_addr];
+
+    assign rs2_data = (rs2_addr == 5'd0)                        ? 32'd0
+                    : (rd_we && (rd_addr == rs2_addr))          ? rd_data
+                    :                                             regs[rs2_addr];
     
 endmodule 
