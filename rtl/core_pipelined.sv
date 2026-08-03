@@ -53,6 +53,7 @@ module core_pipelined (
     logic        branch_taken, branch_cond, take_pc_rel;
     logic [31:0] jalr_target, branch_target;
     logic        br_eq, br_lt, br_ltu;
+    
 
     //EXE->MEM signals
     logic [31:0] mem_alu_result, mem_rs2_data;
@@ -67,11 +68,16 @@ module core_pipelined (
     logic [31:0] mem_wb_data;   // 5-to-1 writeback mux output (resolved in MEM)
 
 
-
     //WRITEBACK SIGNALS
     logic [31:0] wb_data;
     logic [4:0]  wb_rd;
     logic        wb_reg_write;
+    
+    //FORWARDING SIGNALS
+    logic [1:0] fwd_a;
+    logic [1:0] fwd_b;
+    logic [31:0] data_fwd_a;
+    logic [31:0] data_fwd_b;
 
 
     // *************************************************************
@@ -230,22 +236,63 @@ module core_pipelined (
             default: branch_cond = 1'b0;
         endcase
     end
-
+    
+    //intermediate signal
     assign branch_taken  = exe_branch & branch_cond;
+    //adder
     assign branch_target = exe_pc_addr + exe_imm;
     assign take_pc_rel   = branch_taken | exe_jmp;
+    //adder
     assign jalr_target   = (exe_rs1_data + exe_imm) & ~32'd1;
 
-    // operand mux
-    assign alu_b = exe_alu_src ? exe_imm : exe_rs2_data;
+    
+     // forwarding mux for ALU operand A
+    always_comb begin
+        case (fwd_a)
+            2'b01:   data_fwd_a = mem_wb_data;    // forward from MEM (newer)
+            2'b10:   data_fwd_a = wb_data;        // forward from WB
+            default: data_fwd_a = exe_rs1_data;   // no hazard: use the register value
+        endcase
+    end
 
+    // forwarding mux for ALU operand B
+    always_comb begin
+        case (fwd_b)
+            2'b01:   data_fwd_b = mem_wb_data;    // forward from MEM (newer)
+            2'b10:   data_fwd_b = wb_data;        // forward from WB
+            default: data_fwd_b = exe_rs2_data;   // no hazard: use the register value
+        endcase
+    end
+
+    // alu_b mux
+    assign alu_b = exe_alu_src ? exe_imm : data_fwd_b;
+
+    //alu instantiation
     alu u_alu (
         .ctrl(exe_alu_op),
-        .a(exe_rs1_data),
+        .a(data_fwd_a),
         .b(alu_b),
         .res(alu_result)
     );
 
+    //combinational forwarding logic alu
+    always_comb begin
+    // operand A
+    fwd_a = 2'b00;
+        if (mem_reg_write && (mem_rd != 5'd0) && (mem_rd == exe_rs1))
+            fwd_a = 2'b01;
+        else if (wb_reg_write && (wb_rd != 5'd0) && (wb_rd == exe_rs1))
+            fwd_a = 2'b10;
+    
+        // operand B - same logic, exe_rs2 instead of exe_rs1
+        fwd_b = 2'b00;
+        if (mem_reg_write && (mem_rd != 5'd0) && (mem_rd == exe_rs2))
+            fwd_b = 2'b01;
+        else if (wb_reg_write && (wb_rd != 5'd0) && (wb_rd == exe_rs2))
+            fwd_b = 2'b10;
+    end
+    
+    
 
     // ********************************************************
     //EXE->MEM FLIP-FLOPS
@@ -268,7 +315,7 @@ module core_pipelined (
             mem_rd            <= 5'd0;
         end else begin
             mem_alu_result    <= alu_result;
-            mem_rs2_data      <= exe_rs2_data;
+            mem_rs2_data      <= data_fwd_b;
             mem_imm           <= exe_imm;
             mem_branch_target <= branch_target;
             mem_pc_plus4      <= exe_pc_plus4;
