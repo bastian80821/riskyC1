@@ -7,7 +7,7 @@ module imem (
     output logic [31:0] inst
     );
 
-    logic [31:0] imem [0:255];   // 256 words of instruction memory for small test program
+    (* rom_style = "block" *) logic [31:0] imem [0:255];   // 256 words of instruction memory for small test program
 
     //currently used to load a program
     initial begin

@@ -124,7 +124,7 @@ module decoder(
             auipc     = 1'b1;
         end
         
-        
+        default: ;
     endcase
     end
     
