@@ -1,0 +1,28 @@
+// lui  x2, 0x1         x2 = 0x1000 (UART base)
+00001137
+// addi x1, x0, 0x48    'H'
+04800093
+// wait: lw x4, 4(x2)   poll busy BEFORE sending
+00412203
+//       bne x4,x0,wait
+FE021EE3
+//       sw x1, 0(x2)   transmit
+00112023
+// addi x1, x0, 0x49    'I'
+04900093
+// wait: lw x4, 4(x2)   poll busy BEFORE sending
+00412203
+//       bne x4,x0,wait
+FE021EE3
+//       sw x1, 0(x2)   transmit
+00112023
+// addi x1, x0, 0x0A    newline
+00A00093
+// wait: lw x4, 4(x2)   poll busy BEFORE sending
+00412203
+//       bne x4,x0,wait
+FE021EE3
+//       sw x1, 0(x2)   transmit
+00112023
+// spin: jal x0, 0      halt
+0000006F

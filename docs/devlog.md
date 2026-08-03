@@ -775,10 +775,159 @@ Four backward-flowing paths in the design, and every one corresponds to a hazard
 - EX → IF (control flow / branch redirect)
 - WB → ID (register file write port)
 - MEM → EX and WB → EX (forwarding)
-### Next
- 
-Optimisation and verification, in rough priority order:
-- Synthesise and read the timing report — find the *actual* critical path rather than
-  guessing. Prime suspects: the MEM chain above, and EX (forwarding mux + ALU).
-- riscv-tests ISA suite and Spike co-simulation.
-- UART, then on-hardware bring-up for real fmax and utilisation numbers.
+
+---
+
+## Day 11 — UART: Making the Core Talk
+
+**Goal:** give the core real I/O. A processor that can only be observed by reaching into
+its registers in simulation isn't much of a computer — it needs to be able to output
+something.
+
+Also: synthesis had been reporting nonsense (274 LUTs for a whole pipelined core), and
+diagnosing *why* turned out to be as instructive as the UART itself.
+
+### Why synthesis numbers were meaningless
+
+Two separate problems, which I'd been conflating:
+
+**Pruning.** `core_pipelined` had no output ports — only `clk` and `rst` in. Synthesis
+deletes anything that can't affect a pin, so with nothing observable the entire netlist
+was dead logic. Utilization came back *empty*. This doesn't happen in simulation because
+the testbench reaches inside with hierarchical references; synthesis has no equivalent.
+
+**Specialization.** More fundamental: `$readmemh` bakes the program into imem at synthesis
+time, so Vivado knows exactly which instructions exist. It constant-folds through the
+decoder, deletes ALU operations never used, removes branch logic that never fires. What
+gets built isn't a processor — it's *a circuit that computes the results of that one
+program*. imem itself became a 257-input constant mux rather than a memory.
+
+Adding debug outputs fixed pruning (274 LUTs instead of 0). Adding a real UART output pin
+changed it to 298. Adding `rom_style = "block"` to force BRAM inference changed nothing —
+a **combinational** memory read can't infer block RAM, since real BRAMs have a registered
+read port. So the attribute was silently ignored, which is the earlier combinational-read
+decision coming due in a second way.
+
+**Conclusion: honest numbers require the program to be unknown at synthesis time.** That
+means a write port on imem fed from outside — i.e. UART RX and a bootloader. Deferred, but
+now understood rather than guessed at. Nothing else will fix it.
+
+### UART transmitter
+
+New module `uart_tx.sv` — the first **finite state machine** in the project. Everything
+before this was combinational logic or plain registers.
+
+The protocol: one wire, no shared clock. Both ends agree a baud rate and count time
+locally. Line idles high; a falling edge is the start bit; 8 data bits **LSB first**; a
+stop bit returns it high. Ten bit-times per byte.
+
+At 100 MHz and 115200 baud that's **868 clock cycles per bit** — so one byte takes ~8,700
+cycles. The core executes ~8,700 instructions in that time. I/O is *slow*, and that gap is
+not a flaw in the design; it's the nature of talking to the outside world.
+
+Four states (IDLE / START / DATA / STOP), a bit-time counter, a bit index, and a shift
+register. `tx_busy = (state != IDLE)`.
+
+**Why latch `tx_data` into a shift register:** because `tx_data` comes from
+`mem_rs2_data`, a *pipeline* signal that changes every single cycle as instructions flow
+through MEM. The byte is only present for the one cycle the store is in MEM. Pipeline
+signals are one-cycle snapshots, not stored values — the same fact that motivates the
+pipeline registers themselves.
+
+Verified with a testbench that implements a **UART receiver**: it watches the `tx` pin the
+way a terminal would — waits for the start edge, samples the *middle* of each bit window
+(maximum tolerance to clock drift), reassembles LSB-first. Tests the protocol, not the
+implementation. All six bytes pass including `0x00`, `0xFF`, `0xA5`.
+
+Ran it with `CLK_FREQ`/`BAUD_RATE` overridden to give 10 cycles per bit instead of 868 —
+which is exactly why those are parameters rather than constants.
+
+### Memory-mapped I/O
+
+The core talks to the UART through **addresses that aren't memory**:
+
+- `0x1000` — write a byte here → transmit
+- `0x1004` — read here → returns the busy flag
+
+An address decoder in MEM does the routing:
+
+```
+uart_sel      = (mem_alu_result[31:12] != 0)      // >= 0x1000 -> device
+dmem_we       = mem_mem_write & ~uart_sel          // normal store
+tx_start      = mem_mem_write &  uart_sel          // device store
+mem_read_data = uart_sel ? {31'd0, tx_busy} : mem_rdata
+```
+
+One comparator and a few gates. The pipeline has no idea any of this exists — it just
+executes `sw` and `lw`.
+
+`uart_tx_pin` becomes a genuine top-level output, which is what makes the design
+observable to synthesis.
+
+### The core does not wait — software does
+
+There's no hardware stall for I/O. `tx_start` is a one-cycle pulse; if the UART is busy it
+is silently ignored and the byte is dropped. So software must poll:
+
+```
+wait:  lw   x4, 4(x2)      # read busy flag
+       bne  x4, x0, wait
+       sw   x1, 0(x2)      # now safe to send
+```
+
+The core runs that loop at full speed for ~8,700 cycles, doing useless work. That's
+**busy-waiting**, and it's how all simple embedded I/O works. Interrupts or a FIFO would
+avoid the waste; neither is implemented.
+
+Note the loop polls **before** sending, not after — the busy flag isn't valid until a
+cycle after a store lands in MEM.
+
+### Bug found: the branch comparator wasn't forwarded
+
+The poll loop exposed a real hole in the forwarding network. The `bne` depends on the
+immediately-preceding `lw`, but the branch comparator read the **raw** registered values:
+
+```
+assign br_eq = (exe_rs1_data == exe_rs2_data);     // stale!
+```
+
+so it compared data from before the load completed, and the branch resolved wrongly —
+the next store fired while the UART was still busy, dropping the byte. Fixed by comparing
+the **forwarded** operands (`data_fwd_a` / `data_fwd_b`), and the same for the JALR target
+adder, which also read `exe_rs1_data` directly.
+
+**The 18-check regression suite missed this** — no existing test had a branch depending on
+the instruction immediately before it. Worth adding one.
+
+### Result
+
+Wrote a program that prints `"HI\n"`: sets up the UART base address with `lui`, then for
+each character loads the immediate, polls the busy flag, and stores to `0x1000`.
+
+The integration testbench decodes the serial line and traces every memory-stage access.
+Output:
+
+```
+Received 3 bytes:
+  [0] 0x48   'H'
+  [1] 0x49   'I'
+  [2] 0x0a   newline
+===== PASS =====
+```
+
+The trace shows the whole mechanism: the poll loop spinning at one PC with `busy=1` for
+thousands of cycles, then `busy=0`, the branch falling through, and the store firing with
+the next character. Software waiting on hardware, correctly.
+
+One debugging note: the first run appeared to hang. It hadn't — three bytes plus polling
+needs ~26,000 cycles, and the simulation was only running 1,000 ns (100 cycles). Not every
+stuck-looking loop is a bug.
+
+### Status
+
+Pipelined core with working memory-mapped serial output. It fetches and executes a real
+program with loops and branches, forwards a load result into a branch comparison, routes
+stores to a device instead of memory, and serializes bytes at correct baud timing while
+software polls for readiness. That is a computer with I/O.
+
+

@@ -1,10 +1,17 @@
 `timescale 1ns / 1ps
 // 5-stage pipelined RV32I core: IF | ID | EX | MEM | WB
-// STEP 1: pipeline registers only. No forwarding, no stall detection, no branch
-// flushing yet -- data and control hazards are expected to fail.
+// Forwarding (EX bypass network), branch flushing, write-first register file.
+// No load-use stall needed: dmem's combinational read plus a MEM-stage writeback
+// mux make load data forwardable in time (guarded by a regression test).
+// Memory-mapped UART at 0x1000 (write = transmit) / 0x1004 (read = busy flag).
 module core_pipelined (
-    input logic clk,
-    input logic rst
+    input  logic        clk,
+    input  logic        rst,
+    output logic [31:0] debug_pc,
+    output logic [31:0] debug_wb_data,
+    output logic [4:0]  debug_wb_rd,
+    output logic        debug_wb_reg_write,
+    output logic uart_tx_pin
 );
 
     // **********************************************************
@@ -66,7 +73,15 @@ module core_pipelined (
     //MEMORY ACCESS SIGNALS
     logic [31:0] mem_rdata;
     logic [31:0] mem_wb_data;   // 5-to-1 writeback mux output (resolved in MEM)
-
+    
+    //uart
+    logic uart_sel;
+    logic [31:0] mem_read_data;
+    logic [7:0] tx_data;
+    logic       tx_start;
+    logic       tx_busy;
+    logic        dmem_we;
+    
 
     //WRITEBACK SIGNALS
     logic [31:0] wb_data;
@@ -222,9 +237,9 @@ module core_pipelined (
     //****************************************************
 
     // branch comparator
-    assign br_eq  = (exe_rs1_data == exe_rs2_data);
-    assign br_lt  = ($signed(exe_rs1_data) < $signed(exe_rs2_data));
-    assign br_ltu = (exe_rs1_data < exe_rs2_data);
+    assign br_eq  = (data_fwd_a == data_fwd_b);
+    assign br_lt  = ($signed(data_fwd_a) < $signed(data_fwd_b));
+    assign br_ltu = (data_fwd_a < data_fwd_b);
 
     // branch decision
     always_comb begin
@@ -245,7 +260,7 @@ module core_pipelined (
     assign branch_target = exe_pc_addr + exe_imm;
     assign take_pc_rel   = branch_taken | exe_jmp;
     //adder
-    assign jalr_target   = (exe_rs1_data + exe_imm) & ~32'd1;
+    assign jalr_target = (data_fwd_a + exe_imm) & ~32'd1;
 
     assign flush = take_pc_rel | exe_jmpr;
     
@@ -338,22 +353,34 @@ module core_pipelined (
     //MEMORY STAGE
     //****************************************************
 
+    //instantiate date memory
     dmem u_dmem (
         .clk(clk),
         .addr(mem_alu_result),
-        .w_e(mem_mem_write),
+        .w_e(dmem_we),
         .w_data(mem_rs2_data),
         .r_data(mem_rdata)
     );
 
     // 5-to-1 writeback mux, resolved here so MEM/WB carries only the result
     assign mem_wb_data = (mem_jmp | mem_jmpr) ? mem_pc_plus4       // jumps: return address
-                       : mem_mem_read         ? mem_rdata          // loads: memory data
+                       : mem_mem_read         ? mem_read_data          // loads: memory data
                        : mem_lui              ? mem_imm            // LUI: the immediate
                        : mem_auipc            ? mem_branch_target  // AUIPC: pc + imm
                        :                        mem_alu_result;    // everything else
-
-
+    
+    //instantiate uart
+    uart_tx #(.CLK_FREQ(100_000_000), .BAUD_RATE(115_200)) u_uart (
+        .clk(clk), .rst(rst),
+        .tx_start(tx_start), .tx_data(tx_data),
+        .tx(uart_tx_pin), .tx_busy(tx_busy)
+    );
+    
+    assign mem_read_data = uart_sel ? {31'd0, tx_busy} : mem_rdata;
+    assign dmem_we  = mem_mem_write & ~uart_sel;    // normal store -> dmem
+    assign tx_start = mem_mem_write &  uart_sel;    // store to UART range -> transmit
+    assign tx_data  = mem_rs2_data[7:0];            // the byte (low 8 bits)
+    assign uart_sel = (mem_alu_result[31:12] != 20'd0);   // address >= 0x1000 -> device, not memory
     // ********************************************************
     //MEM->WB FLIP-FLOPS
     // ********************************************************
@@ -376,5 +403,13 @@ module core_pipelined (
     //****************************************************
     // Nothing but wires: wb_data / wb_rd / wb_reg_write are connected
     // directly to the register file's write port up in the ID stage.
+    
+    // Debug outputs: anchor the design so synthesis can't optimise it away.
+    // Without observable outputs, nothing the core computes escapes the module,
+    // so the entire netlist is dead logic and gets deleted.
+    assign debug_pc           = pc_addr;
+    assign debug_wb_data      = wb_data;
+    assign debug_wb_rd        = wb_rd;
+    assign debug_wb_reg_write = wb_reg_write;
 
 endmodule
