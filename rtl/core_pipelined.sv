@@ -79,6 +79,8 @@ module core_pipelined (
     logic [31:0] data_fwd_a;
     logic [31:0] data_fwd_b;
 
+    //FLUSH SIGNAL
+    logic       flush;
 
     // *************************************************************
     // INSTRUCTION FETCH STAGE
@@ -110,7 +112,7 @@ module core_pipelined (
     // ********************************************************
 
     always_ff @(posedge clk) begin
-        if (rst) begin
+        if (rst || flush) begin
             id_inst     <= 32'd0;
             id_pc_addr  <= 32'd0;
             id_pc_plus4 <= 32'd0;
@@ -171,7 +173,7 @@ module core_pipelined (
     // ********************************************************
 
     always_ff @(posedge clk) begin
-        if (rst) begin
+        if (rst || flush) begin
             exe_rs1_data  <= 32'd0;
             exe_rs2_data  <= 32'd0;
             exe_imm       <= 32'd0;
@@ -245,6 +247,7 @@ module core_pipelined (
     //adder
     assign jalr_target   = (exe_rs1_data + exe_imm) & ~32'd1;
 
+    assign flush = take_pc_rel | exe_jmpr;
     
      // forwarding mux for ALU operand A
     always_comb begin

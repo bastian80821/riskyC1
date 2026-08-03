@@ -655,13 +655,130 @@ failure is a predicted hazard:
 Also: the pipeline needs ~4 extra cycles to drain, so every test's cycle count had to
 increase (6 → 12).
 
+## Day 10 — Pipelining, Steps 2–4: Forwarding, Flushing, and a Hazard That Wasn't
+ 
+**Goal:** finish the pipeline. Resolve the data and control hazards that Step 1
+deliberately exposed, and get the pipelined core to match single-cycle behaviour.
+ 
+### Step 2: Forwarding
+ 
+The failing test was `add x3, x1, x2` producing 0 — when the `add` reached EX, the two
+`addi`s were still in MEM and WB, so the ID-stage register read returned stale zeros.
+ 
+**The key insight: the values already exist.** The `addi` results are sitting in the
+EX/MEM and MEM/WB pipeline registers. They just haven't been written back to the register
+file yet. So don't wait — route them directly to the ALU inputs, bypassing the register
+file entirely.
+ 
+Built:
+- A **forwarding unit** in EX: combinational logic comparing `exe_rs1`/`exe_rs2` against
+  `mem_rd` and `wb_rd`, producing two 2-bit selects.
+- **Two 3-way muxes** between the ID/EX register and the ALU — one per operand.
+Three conditions gate each forward, and each earns its place:
+- `mem_reg_write` — only forward from an instruction that actually writes a register
+  (a store or branch has meaningless data in `mem_rd`).
+- `mem_rd != 0` — x0 always reads zero; forwarding a "write to x0" would corrupt it.
+- `mem_rd == exe_rs1` — the actual dependency test.
+**MEM takes priority over WB.** If both stages write the same register, MEM holds the
+*newer* value. Getting this backwards produces stale-but-plausible results — the worst
+kind of bug.
+ 
+**Forward `mem_wb_data`, not `mem_alu_result`.** That's the writeback mux output, already
+resolved to what the instruction actually produces — the ALU result for arithmetic, but
+`pc+4` for `jal`, the immediate for `lui`. Forwarding the raw ALU result would break
+`jal x1, target` followed by a use of the return address.
+ 
+**Two operands need two independent muxes**, because either can be the stale one, and both
+can be stale simultaneously from *different* stages — which is exactly the failing test
+(`x1` forwarded from WB, `x2` from MEM, same cycle).
+ 
+**Store data also needs forwarding.** `add x5, ...` followed by `sw x5, 0(x6)` would store
+a stale value if the EX/MEM register captured the raw `exe_rs2_data`. Fixed by capturing
+`data_fwd_b` (the forwarding mux output) instead — note *not* `alu_b`, which may have
+selected the immediate.
+ 
+Result: 11/16 → 15/16. All data hazards resolved.
+ 
+### Step 4: Branch flushing
+ 
+The remaining failure: `x3 = 0x63` on the branch test — the instruction the taken branch
+should have skipped **executed anyway**.
+ 
+Because branches resolve in EX, two instructions behind the branch have already been
+fetched by the time the outcome is known (one in ID, one in IF). The PC redirect works —
+the *target* is fetched correctly — but those two speculative instructions are already
+inside the machine.
+ 
+**The fix reuses the reset path.** A pipeline register cleared to zero holds instruction
+`0x00000000`, which decodes as opcode 0, hits the decoder's `default` case, and produces
+all-zero control signals. That's a **bubble** — an instruction that does nothing. So:
+ 
+```
+assign flush = take_pc_rel | exe_jmpr;
+...
+if (rst || flush) begin ... end     // in the IF/ID and ID/EX banks
+```
+ 
+Six lines total. No new hardware — just a second reason to trigger something that already
+existed.
+ 
+**Only two registers get flushed**, not the whole pipeline. Instructions in EX/MEM and
+MEM/WB are *older* than the branch and are legitimately in flight — killing them would
+discard correct results. The pipeline holds instructions in program order, so "everything
+after the branch" is precisely the two slots behind it.
+ 
+This is the 2-cycle branch penalty, and it's the direct cost of resolving in EX rather
+than ID. It's also the seed of branch prediction: same flush machinery, triggered less
+often because the guess is smarter than "always not-taken."
+ 
+Result: **16/16**. Pipelined core matches single-cycle behaviour on all five programs.
+ 
+### Step 3: the load-use hazard that isn't (this time)
+ 
+The textbook load-use case:
+ 
+```
+lw  x3, 0(x1)
+add x4, x3, x5     # needs x3 in EX
+```
+ 
+Forwarding classically *cannot* fix this — load data isn't available until the end of MEM,
+one cycle after the dependent instruction needs it in EX, and data can't move backward in
+time. It requires a stall.
+ 
+Wrote a test program for it expecting a failure. **It passed.**
+ 
+The reason is architectural, not luck: **dmem's read is combinational** and **the writeback
+mux resolves in MEM**, so `mem_wb_data` already contains the loaded value *within* the MEM
+cycle — and that's exactly what the forwarding path reads. The value is available in time,
+so no stall is needed. In the textbook design, memory is modelled with a synchronous read,
+which is what creates the hazard.
+ 
+**Decision: leave it, and document the tradeoff.** The cost is real — the MEM critical path
+is now `alu_result → dmem combinational read → 5-way writeback mux → forwarding mux → ALU
+input`, a long chain crossing a stage boundary, and a likely candidate for the design's
+critical path at synthesis. A combinational-read memory also won't infer a true BRAM
+(at 256 words it becomes distributed LUT RAM), so it doesn't scale.
+ 
+**Kept the test as a guard.** It passes now, with a comment stating the assumption and
+exactly what would break it: if dmem is ever changed to a registered read, or the writeback
+mux moves to WB, this test fails immediately and a load-use stall becomes necessary. Much
+better than discovering it later as a mysterious wrong answer.
+ 
+### Status
+ 
+**Working 5-stage pipelined RV32I core** — forwarding, branch flushing, write-first
+register file. **18/18 regression checks across 6 programs**, matching the single-cycle
+core's behaviour.
+ 
+Four backward-flowing paths in the design, and every one corresponds to a hazard:
+- EX → IF (control flow / branch redirect)
+- WB → ID (register file write port)
+- MEM → EX and WB → EX (forwarding)
 ### Next
-
-**Step 2: forwarding.** When EX needs a register that MEM or WB is about to write, the
-value already exists in a pipeline register — route it straight to the ALU input instead
-of using the stale register-file read. Needs a forwarding unit comparing `exe_rs1`/
-`exe_rs2` against `mem_rd`/`wb_rd`, plus two muxes in front of the ALU. Should fix
-Tests 1 and 2.
-
-Then Step 3 (load-use stall — the one case forwarding can't fix, since data can't move
-backward in time) and Step 4 (branch flushing).
+ 
+Optimisation and verification, in rough priority order:
+- Synthesise and read the timing report — find the *actual* critical path rather than
+  guessing. Prime suspects: the MEM chain above, and EX (forwarding mux + ALU).
+- riscv-tests ISA suite and Spike co-simulation.
+- UART, then on-hardware bring-up for real fmax and utilisation numbers.

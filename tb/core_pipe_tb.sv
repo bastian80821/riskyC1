@@ -85,9 +85,6 @@ module core_pipe_tb;
         $display("");
 
         // ---------- Test 4: jal / jalr ----------
-        // NOTE: this program loops (jalr returns to addr 4, which then runs again),
-        // so we run exactly 3 cycles and check the PC landed back at the return
-        // address. Checking "x3 stayed 0" would only hold on the first pass.
         $display("Test 4: jal + jalr (jump_test.hex)");
         run_program("C:/Users/Bmars/Desktop/riskyC1/riskyC1/riscyC1/programs/jump_test.hex", 12);
         check_reg(1, 32'd4,  "x1 return addr");
@@ -101,6 +98,13 @@ module core_pipe_tb;
         check_reg(1, 32'h12345000, "lui   x1");
         check_reg(2, 32'h00000004, "auipc x2 = pc+0");
         check_reg(3, 32'h00001008, "auipc x3 = pc+0x1000");
+        $display("");
+        
+        // ---------- Test 6: load-use hazard ----------
+        $display("Test 6: load-use hazard (loaduse_test.hex)");
+        run_program("C:/Users/Bmars/Desktop/riskyC1/riskyC1/riscyC1/programs/loaduse_test.hex", 14);
+        check_reg(3, 32'd42, "lw   x3");
+        check_reg(4, 32'd52, "add  x4 = x3+x5");
         $display("");
 
         // ---------- summary ----------
