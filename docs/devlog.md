@@ -930,4 +930,144 @@ program with loops and branches, forwards a load result into a branch comparison
 stores to a device instead of memory, and serializes bytes at correct baud timing while
 software polls for readiness. That is a computer with I/O.
 
+---
 
+## Day 12 — Runtime Program Loading, Real Numbers, and Hardware Bring-Up
+
+**Goal:** close the loop. Make programs loadable at runtime over serial, get honest
+synthesis numbers, and run the core on the actual FPGA.
+
+### UART receiver
+
+`uart_rx.sv` mirrors the transmitter but is harder in one specific way: **TX sets its own
+timing; RX has to find it.** On the falling start-bit edge it waits *half* a bit-time,
+re-checks the line is still low (rejecting glitches), then samples every bit-time from
+there — landing in the **middle** of each bit window, which gives maximum tolerance to
+clock drift between two independently-clocked machines.
+
+It also has a **two-stage synchroniser** on the `rx` input. That signal arrives from
+outside the FPGA, asynchronous to the local clock; sampling it directly risks
+metastability, where a flip-flop caught mid-transition outputs an undefined level that
+propagates into the design. Two flops in series make that vanishingly unlikely. Standard
+practice for *any* asynchronous external input.
+
+### Bootloader
+
+A hardware FSM rather than a software one — contained, and no bootstrapping problem.
+
+Protocol, little-endian: 4 bytes of word count N, then N words of program. A length
+header rather than a terminator, because no instruction can be mistaken for an end marker.
+
+**The arbitration is trivially solved**: `core_rst = rst_btn | ~core_run` holds the core
+in reset for the entire load, so the bootloader owns imem's write port and the core owns
+its read port, never at the same time. No arbiter needed.
+
+`imem` gains a write port and therefore a clock — it was purely combinational before,
+because read-only memory has no state changes during operation.
+
+### The point of all this: honest synthesis numbers
+
+Previously `$readmemh` baked the program in at synthesis time, so Vivado knew exactly
+which instructions existed and **specialised the design** — constant-folding through the
+decoder, deleting unused ALU operations, removing branch logic that never fires. What got
+built was *a circuit that computes one program's output*, not a processor.
+
+With a write port fed from a top-level input, the contents are unknowable at synthesis.
+Vivado has no choice but to build a general-purpose core.
+
+| | Specialised (before) | General (after) |
+|---|---|---|
+| LUT | 274 | **1120** (3.44%) |
+| FF | 187 | **699** (1.07%) |
+| BRAM | 0 | **0.5** |
+
+A 4x jump, and the FF count now matches the pipeline-register estimate made when the
+stage contents were first listed — a good confirmation the design is what it's supposed
+to be. imem also finally infers as **block RAM** now that it has a proper write port.
+
+### Timing: ~94 MHz
+
+Method: deliberately **over-constrain** to find the ceiling. Set `-period 10.000` (100
+MHz), implement, and read Worst Negative Slack:
+
+```
+WNS = -0.616 ns  ->  required period 10.616 ns  ->  fmax ~94.2 MHz
+```
+
+Confirmed by re-running at 10.616 ns: **WNS +0.066 ns, zero failing endpoints, all
+constraints met.** Hold timing also passes (+0.035 ns), which matters — hold violations
+are far harder to fix than setup ones.
+
+### The critical path was not where I expected
+
+Predicted: the MEM chain (dmem combinational read → 5-way writeback mux → forwarding mux
+→ ALU). Actual, from the timing report — all six worst paths identical in shape:
+
+```
+From: u_core/mem_alu_result_reg[2]   (EX/MEM register)
+To:   u_core/u_pc/pc_reg[29]         (the PC)
+10.603 ns total = 4.380 logic + 6.223 net,  21 logic levels,  fanout 129
+```
+
+That's the **branch-redirect path**: a value in MEM, forwarded backward into EX, through
+the branch comparator, the branch decision logic, the 3-way PC mux, into the PC. Created
+by the fix on Day 11 that made the branch comparator use forwarded operands — necessary
+for correctness, and now the bottleneck.
+
+Notable that **net delay (6.2 ns) exceeds logic delay (4.4 ns)** — nearly 60% is wire, not
+gates. Characteristic of a signal crossing physically distant parts of the chip with high
+fanout. So relocating the writeback mux (the optimisation I'd been assuming) would not
+help much; the fix would be **resolving branches in ID instead of EX**, which shortens
+this path *and* halves the branch penalty. Deferred as a measured optimisation with
+before/after on both fmax and IPC.
+
+### Hardware bring-up
+
+Ran at the board's native 12 MHz rather than adding an MMCM — fmax is a property of the
+timing analysis, not of the clock actually used, so the 94 MHz figure stands regardless.
+
+Bugs hit:
+
+- **UART pins swapped.** Digilent's master XDC names the UART pins **from the USB bridge's
+  perspective**: `uart_rxd_out` (R12) is the bridge's *receive* line, i.e. where the
+  **FPGA transmits**; `uart_txd_in` (V12) is where the **FPGA receives**. I had assigned
+  them by the obvious-looking reading and got both backwards, so the bootloader never saw
+  the incoming bytes. Symptom: LD2 (loading) stayed on forever while the board's own TX
+  indicator blinked — proving bytes reached the bridge but not the receiver.
+- **Baud parameter not propagated.** `uart_tx` was instantiated with a hardcoded
+  `CLK_FREQ(100_000_000)` while the board runs at 12 MHz, so it held each bit for 868
+  cycles instead of 104. Received bytes came out as `0x00`/`0x80` garbage — the signature
+  of sampling at the wrong rate. Fixed by threading `CLK_FREQ`/`BAUD_RATE` as parameters
+  from `top` down through `core_pipelined` to both UARTs, so there is one source of truth.
+  The elaboration log had actually hinted at it: `uart_rx(CLK_FREQ=12000000)` versus
+  `uart_tx_default`.
+- **Hardware Manager hung on "connecting to server".** The Arty S7 uses one FTDI chip for
+  both JTAG and UART, so an open COM port handle can block the JTAG channel. Kill any
+  running serial script before programming.
+
+### Result
+
+```
+> python scripts/send_program.py COM5 programs/hello_test.hex
+Loaded 14 instruction words from programs/hello_test.hex
+Program sent.  Core released.  Output follows:
+----------------------------------------
+HI
+```
+
+Full loop on real silicon: host → serial → bootloader → instruction memory → pipelined
+core → ALU → memory-mapped UART → serial → terminal.
+
+### Status
+
+Working pipelined RV32I processor on a Spartan-7, loading programs at runtime over serial
+and printing results. **1120 LUT / 699 FF / 0.5 BRAM (3.4% of the device), fmax ~94 MHz,
+timing closed with zero failing endpoints.**
+
+### Next
+
+- riscv-tests ISA compliance suite and Spike co-simulation — now practical, since programs
+  load at runtime instead of requiring a re-synthesis each time
+- Dhrystone / CoreMark for IPC
+- Branch resolution in ID: shortens the critical path *and* halves the branch penalty,
+  measurable on both fmax and IPC
