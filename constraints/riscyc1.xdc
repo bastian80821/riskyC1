@@ -4,16 +4,15 @@
 ## 12 MHz user clock (pin F14, Sch=uclk)
 ## 12 MHz user clock (pin F14) -- deliberately over-constrained to find fmax
 set_property -dict { PACKAGE_PIN F14 IOSTANDARD LVCMOS33 } [get_ports { clk }];
-create_clock -name sys_clk -period 10.616 [get_ports { clk }];
-
+create_clock -name sys_clk -period 83.333 -waveform {0 41.667} [get_ports { clk }];
 ## Reset - BTN0 (Sch=btn[0])
 set_property -dict { PACKAGE_PIN G15 IOSTANDARD LVCMOS33 } [get_ports { rst_btn }];
 
-## USB-UART bridge
-## uart_rx_pin is the FPGA's RX  = the bridge's TX output
-## uart_tx_pin is the FPGA's TX  = the bridge's RX input
-set_property -dict { PACKAGE_PIN R12 IOSTANDARD LVCMOS33 } [get_ports { uart_rx_pin }];
-set_property -dict { PACKAGE_PIN V12 IOSTANDARD LVCMOS33 } [get_ports { uart_tx_pin }];
+## USB-UART Interface
+## R12 is uart_rxd_out  = the bridge RECEIVES here = FPGA TRANSMITS
+## V12 is uart_txd_in   = the bridge TRANSMITS here = FPGA RECEIVES
+set_property -dict { PACKAGE_PIN R12 IOSTANDARD LVCMOS33 } [get_ports { uart_tx_pin }];
+set_property -dict { PACKAGE_PIN V12 IOSTANDARD LVCMOS33 } [get_ports { uart_rx_pin }];
 
 ## Status LEDs
 set_property -dict { PACKAGE_PIN E18 IOSTANDARD LVCMOS33 } [get_ports { led[0] }];  # LD2
