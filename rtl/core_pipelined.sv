@@ -4,14 +4,24 @@
 // No load-use stall needed: dmem's combinational read plus a MEM-stage writeback
 // mux make load data forwardable in time (guarded by a regression test).
 // Memory-mapped UART at 0x1000 (write = transmit) / 0x1004 (read = busy flag).
-module core_pipelined (
+// Instruction memory has a write port so a bootloader can load programs at runtime.
+module core_pipelined #(
+    parameter int CLK_FREQ  = 12_000_000,   // must match the actual clock, or baud breaks
+    parameter int BAUD_RATE = 115_200
+) (
     input  logic        clk,
     input  logic        rst,
+    // bootloader write port into instruction memory
+    input  logic        imem_we,
+    input  logic [31:0] imem_waddr,
+    input  logic [31:0] imem_wdata,
+    // serial output
+    output logic        uart_tx_pin,
+    // debug taps
     output logic [31:0] debug_pc,
     output logic [31:0] debug_wb_data,
     output logic [4:0]  debug_wb_rd,
-    output logic        debug_wb_reg_write,
-    output logic uart_tx_pin
+    output logic        debug_wb_reg_write
 );
 
     // **********************************************************
@@ -109,8 +119,12 @@ module core_pipelined (
     );
 
     imem u_imem (
+        .clk(clk),
         .addr(pc_addr),
-        .inst(inst)
+        .inst(inst),
+        .we(imem_we),
+        .waddr(imem_waddr),
+        .wdata(imem_wdata)
     );
 
     assign pc_plus4 = pc_addr + 32'd4;
@@ -370,7 +384,7 @@ module core_pipelined (
                        :                        mem_alu_result;    // everything else
     
     //instantiate uart
-    uart_tx #(.CLK_FREQ(100_000_000), .BAUD_RATE(115_200)) u_uart (
+    uart_tx #(.CLK_FREQ(CLK_FREQ), .BAUD_RATE(BAUD_RATE)) u_uart (
         .clk(clk), .rst(rst),
         .tx_start(tx_start), .tx_data(tx_data),
         .tx(uart_tx_pin), .tx_busy(tx_busy)
