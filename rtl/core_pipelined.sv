@@ -373,7 +373,10 @@ module core_pipelined #(
         .addr(mem_alu_result),
         .w_e(dmem_we),
         .w_data(mem_rs2_data),
-        .r_data(mem_rdata)
+        .r_data(mem_rdata),
+        .boot_we(imem_we),
+        .boot_waddr(imem_waddr),
+        .boot_wdata(imem_wdata)
     );
 
     // 5-to-1 writeback mux, resolved here so MEM/WB carries only the result

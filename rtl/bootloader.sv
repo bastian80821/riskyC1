@@ -1,14 +1,15 @@
 `timescale 1ns / 1ps
-// Hardware bootloader: receives a program over UART and writes it into instruction
-// memory, then releases the core to run.
+// Hardware bootloader: receives a program over UART and writes it into both
+// instruction and data memory, then releases the core.
 //
-// Protocol (host -> board), all little-endian:
-//   1. 4 bytes: word count N
-//   2. N*4 bytes: the program, one 32-bit instruction per 4 bytes
-//   3. bootloader asserts core_run and stops listening
+// Protocol (host -> board), little-endian:
+//   1. 4 bytes : word count N
+//   2. N*4 bytes : the program, one 32-bit instruction per 4 bytes
 //
-// The core is held in reset for the whole load, so there is no contention on imem:
-// the bootloader owns the write port during boot, the core owns the read port after.
+// The bootloader keeps listening after a program has been loaded. Four more
+// bytes arriving are interpreted as a new word count, which drops core_run
+// (resetting the core) and starts a fresh load. That makes it possible to run
+// a suite of test programs back to back without touching the reset button.
 module bootloader (
     input  logic        clk,
     input  logic        rst,
@@ -18,15 +19,19 @@ module bootloader (
     output logic [31:0] imem_waddr,
     output logic [31:0] imem_wdata,
     output logic        core_run,      // high once loading is complete
-    output logic        loading        // high while receiving (for a status LED)
+    output logic        loading        // high while receiving
 );
     typedef enum logic [1:0] {GET_LEN, GET_PROG, DONE} state_t;
     state_t state;
 
-    logic [1:0]  byte_idx;     // which byte of the current word (0-3)
-    logic [31:0] word_buf;     // assembling one 32-bit word
-    logic [31:0] word_count;   // how many words the host says it will send
+    logic [1:0]  byte_idx;
+    logic [31:0] word_buf;
+    logic [31:0] word_count;
     logic [31:0] words_got;
+
+    // the word being assembled, completed by the byte arriving this cycle
+    logic [31:0] full_word;
+    assign full_word = {rx_data, word_buf[31:8]};
 
     assign loading  = (state != DONE);
     assign core_run = (state == DONE);
@@ -42,27 +47,32 @@ module bootloader (
             imem_waddr <= '0;
             imem_wdata <= '0;
         end else begin
-            imem_we <= 1'b0;                        // default: no write
+            imem_we <= 1'b0;
 
             if (rx_valid) begin
-                // shift the new byte into the top of the word buffer.
-                // little-endian: first byte received is the least significant.
-                word_buf <= {rx_data, word_buf[31:8]};
+                word_buf <= full_word;
 
                 if (byte_idx == 2'd3) begin
                     byte_idx <= '0;
                     case (state)
                         GET_LEN: begin
-                            word_count <= {rx_data, word_buf[31:8]};
+                            word_count <= full_word;
+                            words_got  <= '0;
                             state      <= GET_PROG;
                         end
                         GET_PROG: begin
                             imem_we    <= 1'b1;
-                            imem_waddr <= words_got << 2;        // word index -> byte address
-                            imem_wdata <= {rx_data, word_buf[31:8]};
+                            imem_waddr <= words_got << 2;
+                            imem_wdata <= full_word;
                             words_got  <= words_got + 1;
                             if (words_got + 1 == word_count)
                                 state <= DONE;
+                        end
+                        DONE: begin
+                            // a new word count: reload, which drops core_run
+                            word_count <= full_word;
+                            words_got  <= '0;
+                            state      <= GET_PROG;
                         end
                         default: ;
                     endcase
