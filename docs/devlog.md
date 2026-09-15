@@ -1071,3 +1071,166 @@ timing closed with zero failing endpoints.**
 - Dhrystone / CoreMark for IPC
 - Branch resolution in ID: shortens the critical path *and* halves the branch penalty,
   measurable on both fmax and IPC
+
+---
+
+## Day 13 — Full ISA Compliance, Byte/Halfword Access, Counters, and Real Numbers
+
+**Goal:** finish the core. Pass the official RISC-V ISA test suite, complete the RV32I
+memory instructions, add performance counters, raise the clock, and measure everything.
+
+### riscv-tests: the official ISA suite
+
+The reference suite the RISC-V project uses. Getting it running took three pieces of
+setup, one of which is a genuinely nasty trap.
+
+**A custom test environment.** The official `env/p/riscv_test.h` signals pass/fail by
+writing a `tohost` memory location that a simulator watches, and uses CSR / ECALL / FENCE
+instructions. riscyC1 implements none of those. So `riscv_test.h` was rewritten to report
+through the memory-mapped UART instead: `RVTEST_PASS` transmits `'P'`, `RVTEST_FAIL`
+transmits `'F'` plus the failing sub-test number as two hex digits, then both halt on an
+infinite self-jump. That sub-test number matters — each test file contains dozens of
+cases, and `gp` holds the index of whichever one broke.
+
+**A linker script** placing everything flat at address 0 to match the memory map.
+
+**`-mno-relax`, which is the trap.** The linker relaxes `la` into **gp-relative
+addressing** as an optimisation, assuming `gp` points at a global data area. But in this
+test framework **`gp` is `TESTNUM`** — it holds the sub-test counter. Relaxation would
+rewrite address computations relative to a register holding, say, 17, and tests would fail
+in ways that look like the *core* is broken. Silent, and it would have cost a day.
+
+Also needed: `#define TESTNUM gp`, which the official header provides and I initially
+omitted.
+
+### Byte and halfword memory access
+
+The last gap in RV32I: `lb`, `lbu`, `lh`, `lhu`, `sb`, `sh`.
+
+**Stores** replicate the value into all four byte lanes and use a 4-bit write strobe to
+select which actually land — cheaper than shifting. `dmem` was restructured into four
+independently-writable byte arrays to support this.
+
+**Loads** select the lane from `addr[1:0]`, then extend: sign-extend for `lb`/`lh`, zero-
+extend for `lbu`/`lhu`. The signed/unsigned split is the same distinction as the ALU's
+SLT/SLTU, and `func3` now has to cross EX/MEM so the memory stage knows the width.
+
+Verified standalone with 17 cases covering every lane position and both extension modes,
+then end to end on hardware: `sb` three bytes into separate lanes, `lbu` them back, print
+`ABC`.
+
+**Cost: about 20 MHz of fmax.** `mem_access`'s lane-extraction logic sits in the MEM path,
+and splitting `dmem` into byte lanes pushed it out of block RAM into distributed LUT RAM
+(812 LUTRAM appeared in the utilisation report), which is slower. A real tradeoff for
+completing the base ISA.
+
+### Performance counters
+
+No CSRs, so no `mcycle`/`minstret`. Exposed the same information through the I/O map
+instead: `0x1008` cycles, `0x100C` instructions retired.
+
+Counting *retired* instructions needs a **valid bit** flowing down the pipeline — set
+normally, cleared on reset or branch flush — so bubbles are not counted. Four extra
+flip-flops, `id_valid` through `wb_valid`.
+
+### IPC: 0.834, and every lost cycle accounted for
+
+A benchmark running 200 iterations of a loop mixing dependent ALU operations, a store, a
+deliberate load-use hazard, and a taken branch:
+
+```
+cycles        2,403
+instructions  2,005
+IPC           0.834
+CPI           1.199
+MIPS           58.4  (at 70 MHz)
+```
+
+The arithmetic decomposes exactly:
+
+| | |
+|---|---|
+| Loop body | 10 instructions x 200 iterations = 2,000 |
+| Taken branches | 199, each flushing 2 instructions = **398 cycles** |
+| Predicted | 2,398 |
+| Measured | 2,403 |
+
+**Every non-ideal cycle is a branch flush.** Forwarding covers all data dependencies
+including the load-use, so control hazards are the sole penalty. That also quantifies the
+deferred optimisation: resolving branches in ID halves the penalty, predicting ~2,199
+cycles and **IPC ~0.91**.
+
+### Raising the clock: MMCM
+
+The board's oscillator is 12 MHz. An MMCM multiplies it up: the VCO runs high and divides
+down, and must stay within roughly 600-1200 MHz on this part.
+
+```
+VCO   = 12 MHz * CLKFBOUT_MULT_F / DIVCLK_DIVIDE
+clk   = VCO / CLKOUT0_DIVIDE_F
+```
+
+Gotcha: **`CLKFBOUT_MULT_F` must be a multiple of 0.125** — the multiplier has 1/8
+granularity. `58.333` was rejected by DRC at bitstream generation; `58.250` works, giving
+699 MHz VCO and 69.9 MHz output.
+
+`CLK_FREQ` in `top` must match the actual clock or the UART baud timing breaks — the same
+failure mode as the earlier hardcoded-frequency bug.
+
+### Chasing the critical path, and failing
+
+At 75 MHz timing failed by −0.257 ns. The worst paths were all the same shape:
+
+```
+From: u_core/mem_alu_result_reg[...]     (EX/MEM register)
+To:   u_core/u_pc/pc_reg[...]            (the PC)
+      and the ID/EX register reset pins  (fanout 256)
+13.4 ns total = 4.1 logic + 9.3 net
+```
+
+The **branch-redirect path**: a value in MEM, forwarded backward into EX, through the
+comparator and branch decision, then either to the PC or to `flush`, which drives the
+reset pin of every flip-flop in the ID/EX bank.
+
+Two observations made this interesting. **Net delay is ~70% of the path** — it is routing,
+not logic depth. And `flush` has **fanout 256**, a single control signal crossing the chip
+to 256 loads.
+
+So the hypothesis was that fanout was the problem, and replication would fix it. Tested
+two ways:
+
+- **`(* max_fanout = 32 *)` on `flush`** — no effect. Vivado commonly ignores the attribute
+  on nets driving *control* pins (reset/enable), which have dedicated routing, and all 256
+  loads here are reset pins.
+- **`-control_set_opt_threshold 16`** — did break up the reset groups (fanout dropped to
+  122), but made slack **worse**: −0.716 ns. Scattering the logic lengthened other routes.
+
+**Conclusion: this is architectural, not a synthesis-options problem.** A value computed in
+MEM has to physically travel back to EX and then to the PC; no tool setting shortens a
+distance. Reverted both changes and set the clock where it closes.
+
+The identified fix is resolving branches in **ID**: shorter physical distance, shallower
+forwarding, *and* half the branch penalty. It needs a second forwarding network into ID
+plus stall logic for branch-after-ALU dependencies, so it is scoped rather than done.
+
+### Final measurements
+
+| | |
+|---|---|
+| Device | Xilinx Spartan-7 XC7S50-1 |
+| Clock | **70 MHz** (closes with +0.300 ns; 75 MHz fails at −0.257) |
+| LUT | 2,255 (6.9%) |
+| LUTRAM | 812 (8.5%) |
+| FF | 796 (1.2%) |
+| BRAM | 1 (1.3%) |
+| IPC / CPI | 0.834 / 1.199 |
+| MIPS | 58.4 |
+| **ISA compliance** | **38/38 rv32ui** |
+
+Excluded from the suite with reasons: `fence_i` (no instruction cache to flush) and
+`ma_data` (misaligned access unsupported).
+
+### Status
+
+**Complete pipelined RV32I core**, verified against the official ISA suite on hardware,
+with measured performance and a diagnosed critical path.

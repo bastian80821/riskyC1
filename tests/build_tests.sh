@@ -24,6 +24,7 @@ if ! command -v $PREFIX-gcc >/dev/null 2>&1; then
 fi
 echo "Toolchain : $PREFIX-gcc"
 echo "Tests     : $RVTESTS"
+echo
 
 ISA_DIR=$RVTESTS/isa/rv32ui
 MACROS=$RVTESTS/isa/macros/scalar
@@ -36,22 +37,28 @@ fi
 mkdir -p $OUT
 rm -f $OUT/*.hex $OUT/*.elf $OUT/*.bin
 
-# Only instructions riscyC1 implements.
-# Excluded: fence_i (no instruction cache), lb/lbu/lh/lhu/sb/sh (no byte or
-# halfword access), and anything requiring CSRs or ECALL.
-TESTS="add addi and andi auipc beq bge bgeu blt bltu bne jal jalr lui \
-       lw or ori sll slli slt slti sltiu sltu sra srai srl srli sub sw xor xori"
+# Every rv32ui instruction riscyC1 implements.
+#
+# Excluded:
+#   fence_i  - requires an instruction cache to flush; riscyC1 has none
+#   ma_data  - misaligned data access, not supported
+#
+# Included since the byte/halfword memory access work: lb lbu lh lhu sb sh
+TESTS="simple add addi and andi auipc beq bge bgeu blt bltu bne jal jalr \
+       lb lbu lh lhu lui lw or ori sb sh sll slli slt slti sltiu sltu \
+       sra srai srl srli sub sw xor xori"
 
 # -mno-relax is essential: linker relaxation rewrites `la` into gp-relative
 # addressing, but gp is TESTNUM in this test framework, so relaxation would
 # silently corrupt every test.
 CFLAGS="-march=rv32i -mabi=ilp32 -mno-relax -nostdlib -nostartfiles -fno-pic"
 
-OK=0; BAD=0
+OK=0; BAD=0; SKIP=0
 for t in $TESTS; do
     SRC=$ISA_DIR/$t.S
     if [ ! -f "$SRC" ]; then
         echo "  skip   $t   (source not found)"
+        SKIP=$((SKIP+1))
         continue
     fi
 
@@ -62,7 +69,7 @@ for t in $TESTS; do
         python3 bin2hex.py $OUT/$t.bin $OUT/$t.hex
         WORDS=$(wc -l < $OUT/$t.hex)
         if [ "$WORDS" -gt 1024 ]; then
-            echo "  WARN   $t   ($WORDS words - exceeds 1024-word memory!)"
+            echo "  WARN   $t   ($WORDS words - exceeds the 1024-word memory)"
         else
             echo "  built  $t   ($WORDS words)"
         fi
@@ -76,4 +83,4 @@ done
 
 rm -f $OUT/*.elf $OUT/*.bin
 echo
-echo "Built $OK tests, $BAD failed.  Hex files in $OUT/"
+echo "Built $OK tests, $BAD failed, $SKIP skipped.  Hex files in $OUT/"
